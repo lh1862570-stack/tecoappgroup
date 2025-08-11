@@ -78,3 +78,64 @@ class StarsService {
 }
 
 
+class AstronomyEvent {
+  AstronomyEvent({
+    required this.type,
+    required this.time,
+    required this.description,
+  });
+
+  final String type; // e.g., planet_rise, planet_set, moon_phase, solar_eclipse, lunar_eclipse
+  final DateTime time; // UTC
+  final String description;
+
+  factory AstronomyEvent.fromJson(Map<String, dynamic> json) {
+    final String? type = json['type'] as String?;
+    final String? timeStr = (json['time'] ?? json['datetime']) as String?;
+    final String? description = json['description'] as String?;
+    if (type == null || timeStr == null || description == null) {
+      throw const FormatException('Evento inválido: faltan campos');
+    }
+    return AstronomyEvent(
+      type: type,
+      time: DateTime.parse(timeStr).toUtc(),
+      description: description,
+    );
+  }
+}
+
+extension StarsServiceEvents on StarsService {
+  Future<List<AstronomyEvent>> fetchAstronomyEvents({
+    required double latitude,
+    required double longitude,
+    required DateTime startUtc,
+    required DateTime endUtc,
+  }) async {
+    final uri = Uri.parse('$baseUrl/astronomy-events');
+    final response = await http.post(
+      uri,
+      headers: const {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'latitude': latitude,
+        'longitude': longitude,
+        'start_datetime': startUtc.toIso8601String(),
+        'end_datetime': endUtc.toIso8601String(),
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Error ${response.statusCode}: ${response.body}');
+    }
+
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) {
+      throw const FormatException('La respuesta de eventos debe ser una lista');
+    }
+    return decoded
+        .cast<dynamic>()
+        .map<AstronomyEvent>((dynamic item) => AstronomyEvent.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+}
+
+

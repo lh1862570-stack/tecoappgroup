@@ -168,6 +168,11 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                     : AltAzSky(stars: stars),
               ),
             ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 200,
+              child: AstronomyEventsSection(service: _service),
+            ),
           ],
         ),
       ),
@@ -318,6 +323,137 @@ class _AltAzSkyState extends State<AltAzSky> {
     return value >= 1000
         ? '${(value / 1000).toStringAsFixed(2)} k'
         : value.toStringAsFixed(2);
+  }
+}
+
+class AstronomyEventsSection extends StatefulWidget {
+  const AstronomyEventsSection({super.key, required this.service});
+
+  final StarsService service;
+
+  @override
+  State<AstronomyEventsSection> createState() => _AstronomyEventsSectionState();
+}
+
+class _AstronomyEventsSectionState extends State<AstronomyEventsSection> {
+  late Future<List<AstronomyEvent>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    final DateTime nowUtc = DateTime.now().toUtc();
+    _future = widget.service.fetchAstronomyEvents(
+      latitude: -12.0464, // TODO: reemplazar por coordenadas reales
+      longitude: -77.0428,
+      startUtc: DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day, 0, 0, 0),
+      endUtc: DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day, 23, 59, 59),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<AstronomyEvent>>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: Colors.white));
+        }
+        if (snapshot.hasError) {
+          return Center(
+            child: Text('Error al cargar eventos', style: const TextStyle(color: Colors.white70)),
+          );
+        }
+        final List<AstronomyEvent> events = snapshot.data ?? const <AstronomyEvent>[];
+        if (events.isEmpty) {
+          return const Center(
+            child: Text('Sin eventos para hoy', style: TextStyle(color: Colors.white70)),
+          );
+        }
+        return ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          itemCount: events.length,
+          separatorBuilder: (_, __) => const SizedBox(width: 8),
+          itemBuilder: (context, index) {
+            final e = events[index];
+            final (IconData icon, Color color) = _iconAndColorForType(e.type);
+            return Container(
+              width: 280,
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A1A1A),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0x22FFFFFF)),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(icon, color: color),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _titleForType(e.type),
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _formatUtc(e.time),
+                          style: const TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(e.description, style: const TextStyle(color: Colors.white)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  (IconData, Color) _iconAndColorForType(String type) {
+    switch (type) {
+      case 'planet_rise':
+        return (Icons.arrow_upward, const Color(0xFF81D4FA));
+      case 'planet_set':
+        return (Icons.arrow_downward, const Color(0xFF4FC3F7));
+      case 'moon_phase':
+        return (Icons.brightness_2, const Color(0xFFFFF59D));
+      case 'solar_eclipse':
+        return (Icons.brightness_3, const Color(0xFFFF7043));
+      case 'lunar_eclipse':
+        return (Icons.brightness_1, const Color(0xFFBA68C8));
+      default:
+        return (Icons.stars, const Color(0xFF90CAF9));
+    }
+  }
+
+  String _titleForType(String type) {
+    switch (type) {
+      case 'planet_rise':
+        return 'Salida de planeta';
+      case 'planet_set':
+        return 'Puesta de planeta';
+      case 'moon_phase':
+        return 'Fase lunar';
+      case 'solar_eclipse':
+        return 'Eclipse solar';
+      case 'lunar_eclipse':
+        return 'Eclipse lunar';
+      default:
+        return 'Evento astronómico';
+    }
+  }
+
+  String _formatUtc(DateTime t) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return 'UTC ${two(t.hour)}:${two(t.minute)} · ${two(t.day)}/${two(t.month)}/${t.year}';
   }
 }
 

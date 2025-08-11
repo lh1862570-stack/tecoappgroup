@@ -10,7 +10,7 @@ class ConstellationsPage extends StatefulWidget {
 }
 
 class _ConstellationsPageState extends State<ConstellationsPage> with SingleTickerProviderStateMixin {
-  final StarsService _service = StarsService(baseUrl: 'http://10.0.2.2:8000');
+  final StarsService _service = StarsService(baseUrl: 'http://10.0.0.55:8000');
   final List<List<VisibleStar>> _hourlyFrames = <List<VisibleStar>>[];
   AnimationController? _controller;
   bool _loading = true;

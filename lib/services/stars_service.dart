@@ -49,17 +49,13 @@ class StarsService {
     required double longitude,
     required DateTime when,
   }) async {
-    final uri = Uri.parse('$baseUrl/visible-stars');
+    final uri = Uri.parse('$baseUrl/visible-stars').replace(queryParameters: <String, String>{
+      'lat': latitude.toString(),
+      'lon': longitude.toString(),
+      'at': when.toUtc().toIso8601String(),
+    });
 
-    final response = await http.post(
-      uri,
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'latitude': latitude,
-        'longitude': longitude,
-        'datetime': when.toUtc().toIso8601String(),
-      }),
-    );
+    final response = await http.get(uri);
 
     if (response.statusCode != 200) {
       throw Exception('Error ${response.statusCode}: ${response.body}');

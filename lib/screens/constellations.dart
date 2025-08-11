@@ -92,6 +92,7 @@ class _AltAzSkyState extends State<AltAzSky> {
     double closestDistance = double.infinity;
 
     for (final VisibleStar star in widget.stars) {
+      if (star.altitude <= 0) continue; // ignorar bajo horizonte
       final double alt = star.altitude.clamp(0, 90).toDouble();
       final double az = star.azimuth % 360;
 
@@ -214,6 +215,7 @@ class _AltAzPainter extends CustomPainter {
     final Paint starPaint = Paint()..style = PaintingStyle.fill;
 
     for (final VisibleStar star in stars) {
+      if (star.altitude <= 0) continue; // solo por encima del horizonte
       final double alt = star.altitude.clamp(0, 90).toDouble();
       final double az = star.azimuth % 360;
 

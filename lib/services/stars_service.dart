@@ -20,8 +20,8 @@ class VisibleStar {
     // Accept both English and Spanish keys just in case
     String? name = (json['name'] ?? json['nombre']) as String?;
     num? magnitude = (json['magnitude'] ?? json['magnitud']) as num?;
-    num? altitude = (json['altitude'] ?? json['altitud']) as num?;
-    num? azimuth = (json['azimuth'] ?? json['azimut']) as num?;
+    num? altitude = (json['altitude'] ?? json['altitud'] ?? json['altitude_deg']) as num?;
+    num? azimuth = (json['azimuth'] ?? json['azimut'] ?? json['azimuth_deg']) as num?;
     final num? distance = (json['distance'] ?? json['distancia']) as num?;
 
     if (name == null || magnitude == null || altitude == null || azimuth == null) {

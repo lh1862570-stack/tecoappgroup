@@ -2,38 +2,170 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:tecogroup2/services/stars_service.dart';
 
-class ConstellationsPage extends StatelessWidget {
+class ConstellationsPage extends StatefulWidget {
   const ConstellationsPage({super.key});
 
   @override
+  State<ConstellationsPage> createState() => _ConstellationsPageState();
+}
+
+class _ConstellationsPageState extends State<ConstellationsPage> with SingleTickerProviderStateMixin {
+  final StarsService _service = StarsService(baseUrl: 'http://10.0.2.2:8000');
+  final List<List<VisibleStar>> _hourlyFrames = <List<VisibleStar>>[];
+  AnimationController? _controller;
+  bool _loading = true;
+  bool _playing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNightFrames();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadNightFrames() async {
+    setState(() => _loading = true);
+
+    final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
+
+    final List<List<VisibleStar>> frames = <List<VisibleStar>>[];
+    for (final DateTime t in times) {
+      try {
+        // TODO: reemplaza lat/lon por los reales del usuario
+        final stars = await _service.fetchVisibleStars(
+          latitude: -12.0464,
+          longitude: -77.0428,
+          when: t,
+        );
+        frames.add(stars);
+      } catch (_) {
+        frames.add(const <VisibleStar>[]);
+      }
+    }
+
+    if (!mounted) return;
+
+    _hourlyFrames
+      ..clear()
+      ..addAll(frames);
+
+    _controller?.dispose();
+    // Un ciclo completo (18:00 -> 06:00) durará 20 segundos por defecto
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 20))
+      ..addListener(() => setState(() {}))
+      ..repeat();
+
+    _playing = true;
+    setState(() => _loading = false);
+  }
+
+  List<DateTime> _generateNightHoursUtc(DateTime nowUtc) {
+    // Noche: 18:00 del día base a 06:00 del día siguiente (incluye 18..23 y 00..06)
+    final DateTime base = DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day);
+    final DateTime start = base.add(const Duration(hours: 18)); // 18:00 UTC del día actual
+    final DateTime end = base.add(const Duration(days: 1, hours: 6)); // 06:00 UTC del día siguiente
+
+    final List<DateTime> hours = <DateTime>[];
+    DateTime cursor = start;
+    while (!cursor.isAfter(end)) {
+      hours.add(cursor);
+      cursor = cursor.add(const Duration(hours: 1));
+    }
+    return hours;
+  }
+
+  List<VisibleStar> _interpolatedStars() {
+    if (_hourlyFrames.length < 2 || _controller == null) {
+      return const <VisibleStar>[];
+    }
+
+    final int segments = _hourlyFrames.length - 1;
+    final double progress = _controller!.value * segments; // 0..segments
+    final int i = progress.floor().clamp(0, segments - 1);
+    final double t = progress - i;
+
+    final List<VisibleStar> a = _hourlyFrames[i];
+    final List<VisibleStar> b = _hourlyFrames[i + 1];
+
+    final Map<String, VisibleStar> mapA = {for (final s in a) s.name: s};
+    final Map<String, VisibleStar> mapB = {for (final s in b) s.name: s};
+
+    final List<VisibleStar> result = <VisibleStar>[];
+    for (final String name in mapA.keys) {
+      final VisibleStar? sA = mapA[name];
+      final VisibleStar? sB = mapB[name];
+      if (sA == null || sB == null) continue;
+
+      final double alt = sA.altitude + (sB.altitude - sA.altitude) * t;
+      // Interpolación circular de azimut por el camino más corto
+      final double deltaAz = (((sB.azimuth - sA.azimuth) + 540) % 360) - 180;
+      final double az = (sA.azimuth + deltaAz * t) % 360;
+
+      if (alt <= 0) continue; // visible sobre el horizonte
+
+      result.add(VisibleStar(
+        name: name,
+        magnitude: sA.magnitude,
+        altitude: alt,
+        azimuth: az < 0 ? az + 360 : az,
+        distance: sA.distance,
+      ));
+    }
+
+    return result;
+  }
+
+  void _togglePlay() {
+    if (_controller == null) return;
+    if (_playing) {
+      _controller!.stop();
+    } else {
+      _controller!.repeat();
+    }
+    setState(() => _playing = !_playing);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Ejemplo mínimo de datos (reemplaza por la lista real desde tu servicio)
-    final List<VisibleStar> sampleStars = <VisibleStar>[
-      VisibleStar(name: 'Sirius', magnitude: -1.46, altitude: 45, azimuth: 110),
-      VisibleStar(name: 'Canopus', magnitude: -0.74, altitude: 30, azimuth: 170),
-      VisibleStar(name: 'Arcturus', magnitude: -0.05, altitude: 60, azimuth: 60),
-      VisibleStar(name: 'Vega', magnitude: 0.03, altitude: 70, azimuth: 320),
-      VisibleStar(name: 'Capella', magnitude: 0.08, altitude: 20, azimuth: 20),
-      VisibleStar(name: 'Rigel', magnitude: 0.13, altitude: 10, azimuth: 240),
-      VisibleStar(name: 'Procyon', magnitude: 0.40, altitude: 55, azimuth: 95),
-      VisibleStar(name: 'Betelgeuse', magnitude: 0.42, altitude: 25, azimuth: 230),
-    ];
+    final List<VisibleStar> stars = _hourlyFrames.isEmpty ? const <VisibleStar>[] : _interpolatedStars();
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Column(
           children: [
-            const Padding(
-              padding: EdgeInsets.all(12.0),
-              child: Text(
-                'Constelaciones',
-                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+            Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Constelaciones',
+                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: _togglePlay,
+                    icon: Icon(_playing ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                        color: Colors.white),
+                  ),
+                  IconButton(
+                    onPressed: _loadNightFrames,
+                    icon: const Icon(Icons.refresh, color: Colors.white),
+                  ),
+                ],
               ),
             ),
             Expanded(
               child: Center(
-                child: AltAzSky(stars: sampleStars),
+                child: _loading
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : AltAzSky(stars: stars),
               ),
             ),
           ],

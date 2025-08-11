@@ -55,7 +55,7 @@ class StarsService {
       'at': when.toUtc().toIso8601String(),
     });
 
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
       throw Exception('Error ${response.statusCode}: ${response.body}');
@@ -107,18 +107,18 @@ extension StarsServiceEvents on StarsService {
     required DateTime startUtc,
     required DateTime endUtc,
   }) async {
-    final uri = Uri.parse('$baseUrl/astronomy-events');
-    final response = await http.post(
-      uri,
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'latitude': latitude,
-        'longitude': longitude,
-        'start_datetime': startUtc.toIso8601String(),
-        'end_datetime': endUtc.toIso8601String(),
-      }),
-    );
+    final uri = Uri.parse('$baseUrl/astronomy-events').replace(queryParameters: <String, String>{
+      'lat': latitude.toString(),
+      'lon': longitude.toString(),
+      'start_datetime': startUtc.toIso8601String(),
+      'end_datetime': endUtc.toIso8601String(),
+    });
+    final response = await http.get(uri).timeout(const Duration(seconds: 10));
 
+    if (response.statusCode == 404) {
+      // Endpoint no existe en el backend actual: retornar vacío sin error
+      return const <AstronomyEvent>[];
+    }
     if (response.statusCode != 200) {
       throw Exception('Error ${response.statusCode}: ${response.body}');
     }

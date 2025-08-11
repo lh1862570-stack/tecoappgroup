@@ -264,16 +264,21 @@ class _AltAzSkyState extends State<AltAzSky> {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF111111),
+      useSafeArea: true,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (BuildContext context) {
+        final double bottomSafe = MediaQuery.of(context).padding.bottom;
+        const double navOverlayHeight = 30; // CurvedNavigationBar height
         return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + navOverlayHeight + bottomSafe),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
               Row(
                 children: [
                   const Icon(Icons.auto_awesome, color: Colors.white70),
@@ -297,7 +302,8 @@ class _AltAzSkyState extends State<AltAzSky> {
               if (star.distance != null)
                 _infoLine('Distancia', _formatDistance(star.distance!)),
               const SizedBox(height: 12),
-            ],
+              ],
+            ),
           ),
         );
       },

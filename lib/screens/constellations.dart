@@ -173,6 +173,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
               height: 200,
               child: AstronomyEventsSection(service: _service),
             ),
+            // sección educativa movida a SearchPage
           ],
         ),
       ),
@@ -325,6 +326,8 @@ class _AltAzSkyState extends State<AltAzSky> {
         : value.toStringAsFixed(2);
   }
 }
+
+// Sección educativa movida a SearchPage
 
 class AstronomyEventsSection extends StatefulWidget {
   const AstronomyEventsSection({super.key, required this.service});

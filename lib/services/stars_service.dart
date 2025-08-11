@@ -7,12 +7,14 @@ class VisibleStar {
     required this.magnitude,
     required this.altitude,
     required this.azimuth,
+    this.distance,
   });
 
   final String name;
   final double magnitude;
   final double altitude;
   final double azimuth;
+  final double? distance; // opcional
 
   factory VisibleStar.fromJson(Map<String, dynamic> json) {
     // Accept both English and Spanish keys just in case
@@ -20,6 +22,7 @@ class VisibleStar {
     num? magnitude = (json['magnitude'] ?? json['magnitud']) as num?;
     num? altitude = (json['altitude'] ?? json['altitud']) as num?;
     num? azimuth = (json['azimuth'] ?? json['azimut']) as num?;
+    final num? distance = (json['distance'] ?? json['distancia']) as num?;
 
     if (name == null || magnitude == null || altitude == null || azimuth == null) {
       throw const FormatException('Respuesta inválida: faltan campos esperados');
@@ -30,6 +33,7 @@ class VisibleStar {
       magnitude: magnitude.toDouble(),
       altitude: altitude.toDouble(),
       azimuth: azimuth.toDouble(),
+      distance: distance?.toDouble(),
     );
   }
 }

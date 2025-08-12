@@ -1,5 +1,10 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+class VisibleStarFrame {
+  VisibleStarFrame({required this.when, required this.star});
+  final DateTime when;
+  final VisibleStar star;
+}
 
 class VisibleStar {
   VisibleStar({
@@ -8,6 +13,7 @@ class VisibleStar {
     required this.altitude,
     required this.azimuth,
     this.distance,
+    this.aliases = const <String>[],
   });
 
   final String name;
@@ -15,6 +21,7 @@ class VisibleStar {
   final double altitude;
   final double azimuth;
   final double? distance; // opcional
+  final List<String> aliases; // opcional
 
   factory VisibleStar.fromJson(Map<String, dynamic> json) {
     // Accept both English and Spanish keys just in case
@@ -22,7 +29,8 @@ class VisibleStar {
     num? magnitude = (json['magnitude'] ?? json['magnitud']) as num?;
     num? altitude = (json['altitude'] ?? json['altitud'] ?? json['altitude_deg']) as num?;
     num? azimuth = (json['azimuth'] ?? json['azimut'] ?? json['azimuth_deg']) as num?;
-    final num? distance = (json['distance'] ?? json['distancia']) as num?;
+    final num? distance = (json['distance'] ?? json['distancia'] ?? json['distance_ly'] ?? json['distance_km'] ?? json['distance_au']) as num?;
+    final List<String> aliases = (json['aliases'] as List?)?.whereType<String>().toList() ?? const <String>[];
 
     if (name == null || magnitude == null || altitude == null || azimuth == null) {
       throw const FormatException('Respuesta inválida: faltan campos esperados');
@@ -34,6 +42,7 @@ class VisibleStar {
       altitude: altitude.toDouble(),
       azimuth: azimuth.toDouble(),
       distance: distance?.toDouble(),
+      aliases: aliases,
     );
   }
 }
@@ -70,6 +79,47 @@ class StarsService {
         .cast<dynamic>()
         .map<VisibleStar>((dynamic item) => VisibleStar.fromJson(item as Map<String, dynamic>))
         .toList();
+  }
+
+  Future<List<List<VisibleStarFrame>>> fetchVisibleStarsBatch({
+    required double latitude,
+    required double longitude,
+    required DateTime start,
+    required DateTime end,
+    int stepHours = 1,
+  }) async {
+    final uri = Uri.parse('$baseUrl/visible-stars-batch').replace(queryParameters: <String, String>{
+      'lat': latitude.toString(),
+      'lon': longitude.toString(),
+      'start': start.toUtc().toIso8601String(),
+      'end': end.toUtc().toIso8601String(),
+      'step_hours': stepHours.toString(),
+    });
+    final response = await http.get(uri).timeout(const Duration(seconds: 15));
+    if (response.statusCode == 404) {
+      return const <List<VisibleStarFrame>>[]; // no disponible
+    }
+    if (response.statusCode != 200) {
+      throw Exception('Error ${response.statusCode}: ${response.body}');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! Map<String, dynamic>) {
+      throw const FormatException('Batch inválido: se esperaba objeto con frames');
+    }
+    final List<dynamic>? frames = decoded['frames'] as List<dynamic>?;
+    if (frames == null) return const <List<VisibleStarFrame>>[];
+    return frames.map<List<VisibleStarFrame>>((dynamic fr) {
+      final Map<String, dynamic> m = fr as Map<String, dynamic>;
+      final String at = (m['at'] ?? m['time'] ?? m['datetime']) as String;
+      final DateTime when = DateTime.parse(at).toUtc();
+      final List<dynamic> stars = (m['stars'] ?? m['data']) as List<dynamic>;
+      return stars
+          .map<VisibleStarFrame>((dynamic s) => VisibleStarFrame(
+                when: when,
+                star: VisibleStar.fromJson(s as Map<String, dynamic>),
+              ))
+          .toList();
+    }).toList();
   }
 }
 

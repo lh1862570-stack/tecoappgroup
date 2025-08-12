@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:tecogroup2/services/stars_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class ConstellationsPage extends StatefulWidget {
   const ConstellationsPage({super.key});
@@ -25,8 +26,13 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   @override
   void initState() {
     super.initState();
-    _loadNightFrames();
+    _initAndLoad();
     _loadConstellationSegments();
+  }
+
+  Future<void> _initAndLoad() async {
+    await _ensureLocationPermission();
+    await _loadNightFrames();
   }
 
   @override
@@ -74,21 +80,29 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
 
     final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
 
+    // Obtener ubicación real (fallback Santiago de los Caballeros, RD)
+    double lat = -12.0464;
+    double lon = -77.0428;
+    try {
+      final Position pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
+      lat = pos.latitude;
+      lon = pos.longitude;
+    } catch (_) {}
+
     final List<List<VisibleStar>> frames = <List<VisibleStar>>[];
     final List<List<VisibleBody>> bodyFrames = <List<VisibleBody>>[];
     for (final DateTime t in times) {
       try {
-        // TODO: reemplaza lat/lon por los reales del usuario
         final stars = await _service.fetchVisibleStars(
-          latitude: -12.0464,
-          longitude: -77.0428,
+          latitude: lat,
+          longitude: lon,
           when: t,
         );
         frames.add(stars);
         // Cuerpos (planetas, Luna). Si el endpoint no existe, vendrá vacío.
         final bodies = await _service.fetchVisibleBodies(
-          latitude: -12.0464,
-          longitude: -77.0428,
+          latitude: lat,
+          longitude: lon,
           when: t,
         );
         bodyFrames.add(bodies);
@@ -115,6 +129,19 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
 
     _playing = true;
     setState(() => _loading = false);
+  }
+
+  Future<void> _ensureLocationPermission() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      // No forzar UI aquí; el fallback cubrirá
+      return;
+    }
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+    }
+    // deniedForever será cubierto por fallback
   }
 
   List<DateTime> _generateNightHoursUtc(DateTime nowUtc) {
@@ -244,13 +271,16 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                       style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  IconButton(
-                    tooltip: 'Mostrar/Ocultar líneas',
-                    onPressed: () => setState(() => _showConstellationLines = !_showConstellationLines),
-                    icon: Icon(
-                      _showConstellationLines ? Icons.timeline : Icons.timeline_outlined,
-                      color: Colors.white,
-                    ),
+                  Row(
+                    children: [
+                      const Text('Líneas', style: TextStyle(color: Colors.white70)),
+                      const SizedBox(width: 8),
+                      Switch.adaptive(
+                        value: _showConstellationLines,
+                        onChanged: (bool v) => setState(() => _showConstellationLines = v),
+                        activeColor: const Color(0xFF33FFE6),
+                      ),
+                    ],
                   ),
                   IconButton(
                     onPressed: _togglePlay,
@@ -590,9 +620,10 @@ class _AstronomyEventsSectionState extends State<AstronomyEventsSection> {
   void initState() {
     super.initState();
     final DateTime nowUtc = DateTime.now().toUtc();
+    // Usar fallback de RD: Santiago de los Caballeros
     _future = widget.service.fetchAstronomyEvents(
-      latitude: -12.0464, // TODO: reemplazar por coordenadas reales
-      longitude: -77.0428,
+      latitude: 19.4517,
+      longitude: -70.6970,
       startUtc: DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day, 0, 0, 0),
       endUtc: DateTime.utc(nowUtc.year, nowUtc.month, nowUtc.day, 23, 59, 59),
     );
@@ -740,7 +771,7 @@ class _AltAzPainter extends CustomPainter {
     // Marcas cardinales (opcionales y sutiles)
     _drawCardinalMarks(canvas, center, maxRadius);
 
-    // Mapa rápido de posiciones proyectadas por nombre de estrella visible
+    // Mapa rápido de posiciones proyectadas por nombre (normalizado) de estrella visible
     final Map<String, Offset> nameToPos = <String, Offset>{};
 
     // Estrellas
@@ -789,19 +820,19 @@ class _AltAzPainter extends CustomPainter {
         _drawLabel(canvas, Offset(x, y), star.name);
       }
 
-      nameToPos[star.name] = Offset(x, y);
+      nameToPos[_normalizeName(star.name)] = Offset(x, y);
     }
 
     // Líneas de constelaciones: trazar solo si ambos extremos están visibles
     if (showConstellationLines && segments.isNotEmpty) {
       final Paint line = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0
-        ..color = const Color(0x66FFFFFF);
+        ..strokeWidth = 1.6
+        ..color = const Color(0x99FFFFFF);
       for (final List<String> seg in segments) {
         if (seg.length != 2) continue;
-        final Offset? a = nameToPos[seg[0]];
-        final Offset? b = nameToPos[seg[1]];
+        final Offset? a = nameToPos[canonicalStarName(seg[0])];
+        final Offset? b = nameToPos[canonicalStarName(seg[1])];
         if (a == null || b == null) continue;
         canvas.drawLine(a, b, line);
       }
@@ -811,17 +842,19 @@ class _AltAzPainter extends CustomPainter {
     if (showConstellationLines && highlightedSegments.isNotEmpty) {
       final Paint lineHi = Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.2
+        ..strokeWidth = 3.0
         ..color = const Color(0xCC33FFE6)
         ..blendMode = BlendMode.plus;
       for (final List<String> seg in highlightedSegments) {
         if (seg.length != 2) continue;
-        final Offset? a = nameToPos[seg[0]];
-        final Offset? b = nameToPos[seg[1]];
+        final Offset? a = nameToPos[canonicalStarName(seg[0])];
+        final Offset? b = nameToPos[canonicalStarName(seg[1])];
         if (a == null || b == null) continue;
         canvas.drawLine(a, b, lineHi);
       }
     }
+
+    // Si no hay líneas, no mostramos highlights tampoco
 
     // Cuerpos (planetas y Luna): estilo diferenciado
     final Paint bodyPaint = Paint()
@@ -930,6 +963,36 @@ class _AltAzPainter extends CustomPainter {
     painter.layout();
     final Offset textPos = pos + const Offset(8, -10);
     painter.paint(canvas, textPos);
+  }
+
+  String _normalizeName(String name) => name.trim().toLowerCase();
+
+  // Nombre canónico: minúsculas, sin acentos, símbolos griegos transliterados
+  String canonicalStarName(String raw) {
+    String s = raw.trim().toLowerCase();
+    // Quitar acentos básicos
+    const Map<String, String> accentMap = {
+      'á': 'a', 'à': 'a', 'ä': 'a', 'â': 'a',
+      'é': 'e', 'è': 'e', 'ë': 'e', 'ê': 'e',
+      'í': 'i', 'ì': 'i', 'ï': 'i', 'î': 'i',
+      'ó': 'o', 'ò': 'o', 'ö': 'o', 'ô': 'o',
+      'ú': 'u', 'ù': 'u', 'ü': 'u', 'û': 'u',
+      'ñ': 'n'
+    };
+    accentMap.forEach((k, v) => s = s.replaceAll(k, v));
+    // Letras griegas comunes
+    const Map<String, String> greek = {
+      'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta', 'ε': 'epsilon',
+      'ζ': 'zeta', 'η': 'eta', 'θ': 'theta', 'ι': 'iota', 'κ': 'kappa',
+      'λ': 'lambda', 'μ': 'mu', 'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron', 'π': 'pi',
+      'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau', 'υ': 'upsilon', 'φ': 'phi', 'χ': 'chi',
+      'ψ': 'psi', 'ω': 'omega'
+    };
+    greek.forEach((k, v) => s = s.replaceAll(k, v));
+    // Eliminar puntuación y dobles espacios
+    s = s.replaceAll(RegExp(r"[^a-z0-9\s]"), ' ');
+    s = s.replaceAll(RegExp(r"\s+"), ' ').trim();
+    return s;
   }
 
   void _drawMoonPhase(Canvas canvas, Offset center, double radius, double phase) {

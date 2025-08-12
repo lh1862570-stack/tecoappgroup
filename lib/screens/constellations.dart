@@ -1,9 +1,14 @@
 import 'dart:math' as math;
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:tecogroup2/services/stars_service.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:camera/camera.dart';
+// import 'package:flutter_compass/flutter_compass.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 class ConstellationsPage extends StatefulWidget {
   const ConstellationsPage({super.key});
@@ -80,7 +85,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   Future<void> _loadNightFrames() async {
     setState(() => _loading = true);
     try {
-      final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
+    final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
 
       // Resolver ubicación rápida con timeout corto; fallback RD
       final (double lat, double lon) = await _getLatLonFast();
@@ -92,7 +97,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
           final bodiesF = _service.fetchVisibleBodies(latitude: lat, longitude: lon, when: t);
           final results = await Future.wait([starsF, bodiesF]);
           return (results[0] as List<VisibleStar>, results[1] as List<VisibleBody>);
-        } catch (_) {
+      } catch (_) {
           return (const <VisibleStar>[], const <VisibleBody>[]);
         }
       }).toList();
@@ -101,22 +106,22 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
       final List<List<VisibleStar>> frames = results.map((r) => r.$1).toList();
       final List<List<VisibleBody>> bodyFrames = results.map((r) => r.$2).toList();
 
-      if (!mounted) return;
+    if (!mounted) return;
 
-      _hourlyFrames
-        ..clear()
-        ..addAll(frames);
+    _hourlyFrames
+      ..clear()
+      ..addAll(frames);
       _hourlyBodyFrames
         ..clear()
         ..addAll(bodyFrames);
 
-      _controller?.dispose();
-      // Un ciclo completo (18:00 -> 06:00) durará 20 segundos por defecto
-      _controller = AnimationController(vsync: this, duration: const Duration(seconds: 20))
-        ..addListener(() => setState(() {}))
-        ..repeat();
+    _controller?.dispose();
+    // Un ciclo completo (18:00 -> 06:00) durará 20 segundos por defecto
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 20))
+      ..addListener(() => setState(() {}))
+      ..repeat();
 
-      _playing = true;
+    _playing = true;
     } catch (_) {
       // Ignorar, UI seguirá sin bloquearse
     } finally {
@@ -596,7 +601,7 @@ class _AltAzSkyState extends State<AltAzSky> {
                   _infoLine('Fase', (body.phase! * 100).toStringAsFixed(0) + '%'),
                 if (body.distance != null)
                   _infoLine('Distancia', _formatDistance(body.distance!)),
-                const SizedBox(height: 12),
+              const SizedBox(height: 12),
               ],
             ),
           ),
@@ -1094,22 +1099,550 @@ class CameraSkyOverlay extends StatefulWidget {
 }
 
 class _CameraSkyOverlayState extends State<CameraSkyOverlay> {
+  CameraController? _cameraController;
+  bool _cameraReady = false;
+  // StreamSubscription<CompassEvent>? _compassSub;
+  double? _headingDeg; // 0..360, 0=N
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  double _pitchDeg = 0; // +arriba, -abajo
+  double _rollDeg = 0;
+  double _headingOffsetDeg = 0; // ajuste manual
+  double _horizontalFovDeg = 60;
+  double _verticalFovDeg = 45;
+  final TextEditingController _searchCtrl = TextEditingController();
+  final FocusNode _searchFocus = FocusNode();
+  String? _targetLabel;
+  double? _targetAz;
+  double? _targetAlt;
+
+  @override
+  void initState() {
+    super.initState();
+    _initCameraAndSensors();
+  }
+
+  Future<void> _initCameraAndSensors() async {
+    try {
+      // Solicitar permiso de cámara de forma no bloqueante
+      final PermissionStatus camStatus = await Permission.camera.request();
+      if (!mounted) return;
+      if (!camStatus.isGranted) {
+        setState(() => _cameraReady = false);
+        _subscribeCompass();
+        return;
+      }
+      final List<CameraDescription> cameras = await availableCameras();
+      if (!mounted) return;
+      final CameraDescription back = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.isNotEmpty ? cameras.first : (throw StateError('No cameras')),
+      );
+      _cameraController = CameraController(back, ResolutionPreset.medium, enableAudio: false);
+      await _cameraController!.initialize();
+      if (!mounted) return;
+      setState(() => _cameraReady = true);
+      _subscribeCompass();
+    } catch (_) {
+      if (mounted) setState(() => _cameraReady = false);
+      _subscribeCompass();
+    }
+  }
+
+  void _subscribeCompass() {
+    // Si no usamos flutter_compass, mantén headingDeg con offset manual
+    _accelSub?.cancel();
+    _accelSub = accelerometerEvents.listen((AccelerometerEvent e) {
+      // Calcular pitch/roll aproximados
+      final double ax = e.x, ay = e.y, az = e.z;
+      final double pitchRad = math.atan2(-ax, math.sqrt(ay * ay + az * az));
+      final double rollRad = math.atan2(ay, az);
+      final double pitch = pitchRad * 180 / math.pi;
+      final double roll = rollRad * 180 / math.pi;
+      // Suavizado simple
+      const double alpha = 0.85;
+      _pitchDeg = _pitchDeg * alpha + pitch * (1 - alpha);
+      _rollDeg = _rollDeg * alpha + roll * (1 - alpha);
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    // _compassSub?.cancel();
+    _accelSub?.cancel();
+    _cameraController?.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
-    // Placeholder: en siguiente paso añadimos CameraController y sensores
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Container(color: Colors.black),
-        const Center(
-          child: Text(
-            'Modo Cámara (AR) — Próximo paso: activar cámara y sensores',
-            style: TextStyle(color: Colors.white70),
-            textAlign: TextAlign.center,
+    final double headingEffective = ((_headingDeg ?? 0) + _headingOffsetDeg) % 360;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (details) => _handleTap(details.localPosition, context),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (_cameraReady && _cameraController != null)
+            CameraPreview(_cameraController!)
+          else
+            Container(color: Colors.black),
+          // Overlay AR: proyectar estrellas y cuerpos con rumbo/pitch
+          CustomPaint(
+            painter: _ArOverlayPainter(
+              stars: widget.stars,
+              bodies: widget.bodies,
+              headingDeg: headingEffective,
+              pitchDeg: _pitchDeg,
+              rollDeg: _rollDeg,
+              horizontalFovDeg: _horizontalFovDeg,
+              verticalFovDeg: _verticalFovDeg,
+              targetAz: _targetAz,
+              targetAlt: _targetAlt,
+              targetLabel: _targetLabel,
+            ),
           ),
-        ),
-      ],
+          Positioned(
+            top: 10,
+            left: 10,
+            child: _infoChip(
+              _cameraReady ? 'Cámara OK' : 'Cámara no disponible',
+            ),
+          ),
+          Positioned(
+            top: 10,
+            right: 10,
+            child: _infoChip('Rumbo: ${_headingDeg?.toStringAsFixed(0) ?? '--'}° · Adj: ${_headingOffsetDeg.toStringAsFixed(0)}° · Pitch: ${_pitchDeg.toStringAsFixed(0)}°'),
+          ),
+          Positioned(
+            bottom: 16,
+            left: 16,
+            right: 16,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _smallButton('−5°', () => setState(() => _headingOffsetDeg = (_headingOffsetDeg - 5) % 360)),
+                const SizedBox(width: 8),
+                _smallButton('Reset', () => setState(() => _headingOffsetDeg = 0)),
+                const SizedBox(width: 8),
+                _smallButton('+5°', () => setState(() => _headingOffsetDeg = (_headingOffsetDeg + 5) % 360)),
+              ],
+            ),
+          ),
+          Positioned(
+            bottom: 68,
+            left: 16,
+            right: 16,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0x66000000),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _searchCtrl,
+                      focusNode: _searchFocus,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        hintText: 'Buscar estrella/planeta (ej. Orion, Marte, Luna)',
+                        hintStyle: TextStyle(color: Colors.white54),
+                        border: InputBorder.none,
+                      ),
+                      onSubmitted: (_) => _onSearch(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _smallButton('Ir', _onSearch),
+                const SizedBox(width: 8),
+                _smallButton('X', () => setState(() { _targetAz = null; _targetAlt = null; _targetLabel = null; })),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
+
+  Widget _infoChip(String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: const Color(0x66000000),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(text, style: const TextStyle(color: Colors.white, fontSize: 12)),
+    );
+  }
+
+  Widget _smallButton(String label, VoidCallback onTap) {
+    return ElevatedButton(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0x99212121),
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+      onPressed: onTap,
+      child: Text(label),
+    );
+  }
+
+  void _handleTap(Offset localPos, BuildContext context) {
+    final RenderBox box = context.findRenderObject() as RenderBox;
+    final Size size = box.size;
+    final double halfW = size.width / 2;
+    final double halfH = size.height / 2;
+    final double headingEffective = ((_headingDeg ?? 0) + _headingOffsetDeg) % 360;
+
+    double wrap180(double deg) {
+      double x = ((deg + 180) % 360);
+      if (x < 0) x += 360;
+      return x - 180;
+    }
+
+    VisibleBody? bestBody;
+    VisibleStar? bestStar;
+    double bestDist = double.infinity;
+
+    // proyectar cuerpos
+    for (final VisibleBody b in widget.bodies) {
+      if (b.altitude <= 0) continue;
+      final double dAz = wrap180(b.azimuth - headingEffective);
+      final double dAlt = b.altitude - _pitchDeg;
+      if (dAz.abs() > _horizontalFovDeg / 2 || dAlt.abs() > _verticalFovDeg / 2) continue;
+      final double x = halfW + (dAz / (_horizontalFovDeg / 2)) * halfW;
+      final double y = halfH - (dAlt / (_verticalFovDeg / 2)) * halfH;
+      final double r = b.type.toLowerCase() == 'moon' ? 24.0 : 18.0;
+      final double d = (localPos - Offset(x, y)).distance;
+      if (d <= r && d < bestDist) {
+        bestDist = d;
+        bestBody = b;
+        bestStar = null;
+      }
+    }
+
+    // proyectar estrellas
+    for (final VisibleStar s in widget.stars) {
+      if (s.altitude <= 0) continue;
+      final double dAz = wrap180(s.azimuth - headingEffective);
+      final double dAlt = s.altitude - _pitchDeg;
+      if (dAz.abs() > _horizontalFovDeg / 2 || dAlt.abs() > _verticalFovDeg / 2) continue;
+      final double x = halfW + (dAz / (_horizontalFovDeg / 2)) * halfW;
+      final double y = halfH - (dAlt / (_verticalFovDeg / 2)) * halfH;
+      final double base = 4.5 - (s.magnitude + 1.5) * 0.7;
+      final double r = (base.clamp(1.0, 4.5) * 6).clamp(10.0, 18.0);
+      final double d = (localPos - Offset(x, y)).distance;
+      if (d <= r && d < bestDist) {
+        bestDist = d;
+        bestStar = s;
+        bestBody = null;
+      }
+    }
+
+    if (bestBody != null) {
+      _showBodySheet(context, bestBody);
+      return;
+    }
+    if (bestStar != null) {
+      _showStarSheet(context, bestStar);
+    }
+  }
+
+  void _showStarSheet(BuildContext context, VisibleStar star) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF111111),
+      useSafeArea: true,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext context) {
+        final double bottomSafe = MediaQuery.of(context).padding.bottom;
+        const double navOverlayHeight = 30;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + navOverlayHeight + bottomSafe),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.auto_awesome, color: Colors.white70),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      star.name,
+                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _infoLine('Magnitud', star.magnitude.toStringAsFixed(2)),
+              _infoLine('Altitud', '${star.altitude.toStringAsFixed(1)}°'),
+              _infoLine('Azimut', '${star.azimuth.toStringAsFixed(1)}°'),
+              if (star.distance != null) _infoLine('Distancia', _formatDistance(star.distance!)),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showBodySheet(BuildContext context, VisibleBody body) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF111111),
+      useSafeArea: true,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext context) {
+        final double bottomSafe = MediaQuery.of(context).padding.bottom;
+        const double navOverlayHeight = 30;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + navOverlayHeight + bottomSafe),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.public, color: Colors.white70),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      body.name,
+                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _infoLine('Tipo', body.type),
+              _infoLine('Magnitud', body.magnitude.toStringAsFixed(2)),
+              _infoLine('Altitud', '${body.altitude.toStringAsFixed(1)}°'),
+              _infoLine('Azimut', '${body.azimuth.toStringAsFixed(1)}°'),
+              if (body.phase != null) _infoLine('Fase', (body.phase! * 100).toStringAsFixed(0) + '%'),
+              if (body.distance != null) _infoLine('Distancia', _formatDistance(body.distance!)),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _infoLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        children: [
+          Text('$label: ', style: const TextStyle(color: Colors.white70)),
+          Expanded(child: Text(value, style: const TextStyle(color: Colors.white))),
+        ],
+      ),
+    );
+  }
+
+  String _formatDistance(double value) {
+    return value >= 1000 ? '${(value / 1000).toStringAsFixed(2)} k' : value.toStringAsFixed(2);
+  }
+
+  void _onSearch() {
+    final String query = _searchCtrl.text.trim();
+    if (query.isEmpty) return;
+    final String cq = _canonical(query);
+    VisibleBody? body;
+    // Priorizar cuerpos (planetas/Luna)
+    for (final b in widget.bodies) {
+      if (_canonical(b.name).contains(cq)) { body = b; break; }
+    }
+    final VisibleBody? pickedBody = body;
+    if (pickedBody != null) {
+      setState(() {
+        _targetAz = pickedBody.azimuth;
+        _targetAlt = pickedBody.altitude;
+        _targetLabel = pickedBody.name;
+      });
+      return;
+    }
+    // Buscar estrellas, incluyendo aliases
+    VisibleStar? star;
+    for (final s in widget.stars) {
+      if (_canonical(s.name).contains(cq)) { star = s; break; }
+      if (s.aliases.isNotEmpty) {
+        final bool any = s.aliases.any((a) => _canonical(a).contains(cq));
+        if (any) { star = s; break; }
+      }
+    }
+    final VisibleStar? pickedStar = star;
+    if (pickedStar != null) {
+      setState(() {
+        _targetAz = pickedStar.azimuth;
+        _targetAlt = pickedStar.altitude;
+        _targetLabel = pickedStar.name;
+      });
+    }
+  }
+
+  String _canonical(String raw) {
+    String s = raw.trim().toLowerCase();
+    const Map<String, String> acc = {
+      'á':'a','à':'a','ä':'a','â':'a',
+      'é':'e','è':'e','ë':'e','ê':'e',
+      'í':'i','ì':'i','ï':'i','î':'i',
+      'ó':'o','ò':'o','ö':'o','ô':'o',
+      'ú':'u','ù':'u','ü':'u','û':'u','ñ':'n'
+    };
+    acc.forEach((k,v){ s = s.replaceAll(k,v);});
+    const Map<String,String> greek={
+      'α':'alpha','β':'beta','γ':'gamma','δ':'delta','ε':'epsilon','ζ':'zeta','η':'eta','θ':'theta','ι':'iota','κ':'kappa','λ':'lambda','μ':'mu','ν':'nu','ξ':'xi','ο':'omicron','π':'pi','ρ':'rho','σ':'sigma','τ':'tau','υ':'upsilon','φ':'phi','χ':'chi','ψ':'psi','ω':'omega'
+    };
+    greek.forEach((k,v){ s = s.replaceAll(k,v);});
+    s = s.replaceAll(RegExp(r"[^a-z0-9\s]"), ' ');
+    s = s.replaceAll(RegExp(r"\s+"), ' ').trim();
+    return s;
+  }
+}
+
+class _ArOverlayPainter extends CustomPainter {
+  _ArOverlayPainter({
+    required this.stars,
+    required this.bodies,
+    required this.headingDeg,
+    required this.pitchDeg,
+    required this.rollDeg,
+    required this.horizontalFovDeg,
+    required this.verticalFovDeg,
+    this.targetAz,
+    this.targetAlt,
+    this.targetLabel,
+  });
+
+  final List<VisibleStar> stars;
+  final List<VisibleBody> bodies;
+  final double headingDeg; // 0=N
+  final double pitchDeg; // +arriba
+  final double rollDeg;
+  final double horizontalFovDeg;
+  final double verticalFovDeg;
+  final double? targetAz;
+  final double? targetAlt;
+  final String? targetLabel;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint p = Paint()..style = PaintingStyle.fill;
+    final double halfW = size.width / 2;
+    final double halfH = size.height / 2;
+
+    void drawPoint(double dx, double dy, Color color, double r, [String? label]) {
+      p.color = color.withOpacity(0.95);
+      canvas.drawCircle(Offset(dx, dy), r, p);
+      p.color = color.withOpacity(0.35);
+      canvas.drawCircle(Offset(dx, dy), r * 2.0, p);
+      if (label != null) {
+        final TextPainter tp = TextPainter(
+          text: TextSpan(text: label, style: const TextStyle(color: Colors.white, fontSize: 12)),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(dx + 6, dy - 6));
+      }
+    }
+
+    double wrap180(double deg) {
+      double x = ((deg + 180) % 360);
+      if (x < 0) x += 360;
+      return x - 180;
+    }
+
+    // Dibujar estrellas
+    for (final VisibleStar s in stars) {
+      if (s.altitude <= 0) continue;
+      final double dAz = wrap180(s.azimuth - headingDeg);
+      final double dAlt = s.altitude - pitchDeg;
+      if (dAz.abs() > horizontalFovDeg / 2 || dAlt.abs() > verticalFovDeg / 2) continue;
+      final double x = halfW + (dAz / (horizontalFovDeg / 2)) * halfW;
+      final double y = halfH - (dAlt / (verticalFovDeg / 2)) * halfH;
+      final double r = (4.5 - (s.magnitude + 1.5) * 0.6).clamp(1.5, 5.0);
+      drawPoint(x, y, Colors.white, r, s.magnitude <= 1.0 ? s.name : null);
+    }
+
+    // Dibujar cuerpos
+    for (final VisibleBody b in bodies) {
+      if (b.altitude <= 0) continue;
+      final double dAz = wrap180(b.azimuth - headingDeg);
+      final double dAlt = b.altitude - pitchDeg;
+      if (dAz.abs() > horizontalFovDeg / 2 || dAlt.abs() > verticalFovDeg / 2) continue;
+      final double x = halfW + (dAz / (horizontalFovDeg / 2)) * halfW;
+      final double y = halfH - (dAlt / (verticalFovDeg / 2)) * halfH;
+      final bool isMoon = b.type.toLowerCase() == 'moon';
+      final bool isPlanet = b.type.toLowerCase() == 'planet';
+      final Color color = isMoon
+          ? const Color(0xFFFFF3C4)
+          : isPlanet
+              ? const Color(0xFF99E0FF)
+              : Colors.white;
+      final double r = isMoon ? 7.0 : 5.0;
+      drawPoint(x, y, color, r, b.name);
+    }
+
+    // Retícula simple
+    final Paint cross = Paint()
+      ..style = PaintingStyle.stroke
+      ..color = const Color(0x66FFFFFF)
+      ..strokeWidth = 1.0;
+    canvas.drawLine(Offset(halfW - 10, halfH), Offset(halfW + 10, halfH), cross);
+    canvas.drawLine(Offset(halfW, halfH - 10), Offset(halfW, halfH + 10), cross);
+
+    // Flecha hacia objetivo si está fuera de FOV
+    if (targetAz != null && targetAlt != null) {
+      final double dAz = wrap180(targetAz! - headingDeg);
+      final double dAlt = targetAlt! - pitchDeg;
+      final bool inFov = dAz.abs() <= horizontalFovDeg / 2 && dAlt.abs() <= verticalFovDeg / 2;
+      final Paint arrow = Paint()..color = const Color(0xFFFFD54F);
+      if (inFov) {
+        final double x = halfW + (dAz / (horizontalFovDeg / 2)) * halfW;
+        final double y = halfH - (dAlt / (verticalFovDeg / 2)) * halfH;
+        canvas.drawCircle(Offset(x, y), 6, arrow);
+        final TextPainter tp = TextPainter(
+          text: TextSpan(text: targetLabel ?? 'Objetivo', style: const TextStyle(color: Colors.white)),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(x + 8, y - 8));
+      } else {
+        // Dibujar en el borde la dirección horizontal
+        final double angle = math.atan2(-dAlt, dAz); // orientación aproximada
+        final double x = halfW + (halfW - 20) * math.cos(angle);
+        final double y = halfH - (halfH - 20) * math.sin(angle);
+        final Path tri = Path()
+          ..moveTo(x, y)
+          ..lineTo(x - 10, y + 6)
+          ..lineTo(x - 10, y - 6)
+          ..close();
+        canvas.drawPath(tri, arrow);
+      }
+    }
+  }
+
+    @override
+    bool shouldRepaint(covariant _ArOverlayPainter oldDelegate) {
+      return oldDelegate.stars != stars ||
+          oldDelegate.bodies != bodies ||
+          oldDelegate.headingDeg != headingDeg ||
+          oldDelegate.pitchDeg != pitchDeg ||
+          oldDelegate.rollDeg != rollDeg ||
+          oldDelegate.horizontalFovDeg != horizontalFovDeg ||
+          oldDelegate.verticalFovDeg != verticalFovDeg;
+    }
 }
 

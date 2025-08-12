@@ -796,6 +796,19 @@ class _AltAzPainter extends CustomPainter {
     final Offset center = size.center(Offset.zero);
     final double maxRadius = math.min(size.width, size.height) / 2 - padding;
 
+    // Fondo con gradiente radial (cielo nocturno sutil)
+    final Rect skyRect = Rect.fromCircle(center: center, radius: maxRadius + padding);
+    final Paint skyPaint = Paint()
+      ..shader = RadialGradient(
+        colors: const [
+          Color(0xFF090B1A), // cenit ligeramente más claro
+          Color(0xFF050713),
+          Color(0xFF000000), // horizonte más oscuro
+        ],
+        stops: const [0.0, 0.65, 1.0],
+      ).createShader(skyRect);
+    canvas.drawCircle(center, maxRadius + padding, skyPaint);
+
     // Círculo del horizonte
     canvas.drawCircle(center, maxRadius, _circlePaint);
 
@@ -813,10 +826,12 @@ class _AltAzPainter extends CustomPainter {
     for (final VisibleStar star in stars) {
       if (star.altitude <= 0) continue; // solo por encima del horizonte
       final double alt = star.altitude.clamp(0, 90).toDouble();
+      // Ajuste leve por refracción cerca del horizonte (solo visual)
+      final double altAdj = alt < 10 ? alt + (10 - alt) * 0.03 : alt;
       final double az = star.azimuth % 360;
 
       // Proyección: r = (1 - alt/90) * maxRadius (horizonte en el borde, cenit al centro)
-      final double r = (1 - (alt / 90.0)) * maxRadius;
+      final double r = (1 - (altAdj / 90.0)) * maxRadius;
 
       // Ángulo: 0° = Norte (arriba), 90° = Este (derecha) -> theta = az - 90°
       final double theta = _degToRad(az - 90);
@@ -831,18 +846,22 @@ class _AltAzPainter extends CustomPainter {
       final double radius = (baseRadius * sizeMul).clamp(0.8, 6.0);
 
       // Brillo base por magnitud con variación (twinkle)
-      double opacity = _opacityForMagnitude(star.magnitude) * opacityMul;
+      // atenuación atmosférica hacia el horizonte
+      final double extinction = _extinctionForAltitude(altAdj);
+      double opacity = _opacityForMagnitude(star.magnitude) * opacityMul * extinction;
       opacity = opacity.clamp(0.45, 1.0);
 
+      // Color: más cálido cerca del horizonte
+      final Color baseColor = _colorForAltitude(altAdj);
       // Núcleo
-      starPaint.color = Colors.white.withOpacity(opacity);
+      starPaint.color = baseColor.withOpacity(opacity);
       canvas.drawCircle(Offset(x, y), radius, starPaint);
 
       // Halo externo suave (dos capas)
       final double halo1Radius = radius * 1.8;
       final double halo2Radius = radius * 2.8;
       final double haloOpacity = (opacity * 0.35).clamp(0.15, 0.5);
-      starPaint.color = Colors.white.withOpacity(haloOpacity);
+      starPaint.color = baseColor.withOpacity(haloOpacity);
       canvas.drawCircle(Offset(x, y), halo1Radius, starPaint);
       canvas.drawCircle(Offset(x, y), halo2Radius, starPaint);
 
@@ -944,6 +963,26 @@ class _AltAzPainter extends CustomPainter {
     // Más brillante para magnitudes negativas. Rango aproximado 0.5 .. 1.0
     final double base = 1.0 - (magnitude * 0.07);
     return base.clamp(0.5, 1.0);
+  }
+
+  // Atenuación atmosférica simple (1.0 en cenit, 0.75 hacia horizonte)
+  double _extinctionForAltitude(double alt) {
+    final double t = (alt / 90.0).clamp(0.0, 1.0);
+    return 0.75 + 0.25 * t; // 0.75 en 0°, 1.0 en 90°
+  }
+
+  // Color base según altitud (más cálido en el horizonte)
+  Color _colorForAltitude(double alt) {
+    final double t = (alt / 90.0).clamp(0.0, 1.0);
+    final Color warm = const Color(0xFFFFE0B2); // cálido
+    final Color cold = Colors.white; // cenit blanco
+    int lerp(int a, int b) => a + ((b - a) * t).round();
+    return Color.fromARGB(
+      255,
+      lerp(warm.red, cold.red),
+      lerp(warm.green, cold.green),
+      lerp(warm.blue, cold.blue),
+    );
   }
 
   (double, double) _twinkleFactors(String name, double magnitude) {

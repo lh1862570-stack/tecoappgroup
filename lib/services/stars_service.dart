@@ -74,6 +74,77 @@ class StarsService {
 }
 
 
+class VisibleBody {
+  VisibleBody({
+    required this.name,
+    required this.type,
+    required this.magnitude,
+    required this.altitude,
+    required this.azimuth,
+    this.phase,
+    this.distance,
+  });
+
+  final String name; // e.g., Mars, Jupiter, Moon
+  final String type; // planet, moon, sun, comet, etc.
+  final double magnitude;
+  final double altitude;
+  final double azimuth;
+  final double? phase; // 0..1 (principal para la Luna), opcional
+  final double? distance; // opcional (unidades según backend)
+
+  factory VisibleBody.fromJson(Map<String, dynamic> json) {
+    final String? name = (json['name'] ?? json['nombre']) as String?;
+    final String? type = (json['type'] ?? json['tipo']) as String?;
+    final num? magnitude = (json['magnitude'] ?? json['magnitud']) as num?;
+    final num? altitude = (json['altitude'] ?? json['altitud'] ?? json['altitude_deg']) as num?;
+    final num? azimuth = (json['azimuth'] ?? json['azimut'] ?? json['azimuth_deg']) as num?;
+    final num? phase = (json['phase'] ?? json['fase']) as num?;
+    final num? distance = (json['distance'] ?? json['distancia']) as num?;
+    if (name == null || type == null || magnitude == null || altitude == null || azimuth == null) {
+      throw const FormatException('Cuerpo inválido: faltan campos');
+    }
+    return VisibleBody(
+      name: name,
+      type: type,
+      magnitude: magnitude.toDouble(),
+      altitude: altitude.toDouble(),
+      azimuth: azimuth.toDouble(),
+      phase: phase?.toDouble(),
+      distance: distance?.toDouble(),
+    );
+  }
+}
+
+extension StarsServiceBodies on StarsService {
+  Future<List<VisibleBody>> fetchVisibleBodies({
+    required double latitude,
+    required double longitude,
+    required DateTime when,
+  }) async {
+    final uri = Uri.parse('$baseUrl/visible-bodies').replace(queryParameters: <String, String>{
+      'lat': latitude.toString(),
+      'lon': longitude.toString(),
+      'at': when.toUtc().toIso8601String(),
+    });
+    final response = await http.get(uri).timeout(const Duration(seconds: 10));
+    if (response.statusCode == 404) {
+      return const <VisibleBody>[]; // endpoint no disponible
+    }
+    if (response.statusCode != 200) {
+      throw Exception('Error ${response.statusCode}: ${response.body}');
+    }
+    final decoded = jsonDecode(response.body);
+    if (decoded is! List) {
+      throw const FormatException('La respuesta de cuerpos debe ser una lista');
+    }
+    return decoded
+        .cast<dynamic>()
+        .map<VisibleBody>((dynamic item) => VisibleBody.fromJson(item as Map<String, dynamic>))
+        .toList();
+  }
+}
+
 class AstronomyEvent {
   AstronomyEvent({
     required this.type,

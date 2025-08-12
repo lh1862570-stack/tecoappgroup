@@ -12,6 +12,7 @@ class ConstellationsPage extends StatefulWidget {
 class _ConstellationsPageState extends State<ConstellationsPage> with SingleTickerProviderStateMixin {
   final StarsService _service = StarsService(baseUrl: 'http://10.0.0.55:8000');
   final List<List<VisibleStar>> _hourlyFrames = <List<VisibleStar>>[];
+  final List<List<VisibleBody>> _hourlyBodyFrames = <List<VisibleBody>>[];
   AnimationController? _controller;
   bool _loading = true;
   bool _playing = true;
@@ -34,6 +35,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
     final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
 
     final List<List<VisibleStar>> frames = <List<VisibleStar>>[];
+    final List<List<VisibleBody>> bodyFrames = <List<VisibleBody>>[];
     for (final DateTime t in times) {
       try {
         // TODO: reemplaza lat/lon por los reales del usuario
@@ -43,8 +45,16 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
           when: t,
         );
         frames.add(stars);
+        // Cuerpos (planetas, Luna). Si el endpoint no existe, vendrá vacío.
+        final bodies = await _service.fetchVisibleBodies(
+          latitude: -12.0464,
+          longitude: -77.0428,
+          when: t,
+        );
+        bodyFrames.add(bodies);
       } catch (_) {
         frames.add(const <VisibleStar>[]);
+        bodyFrames.add(const <VisibleBody>[]);
       }
     }
 
@@ -53,6 +63,9 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
     _hourlyFrames
       ..clear()
       ..addAll(frames);
+    _hourlyBodyFrames
+      ..clear()
+      ..addAll(bodyFrames);
 
     _controller?.dispose();
     // Un ciclo completo (18:00 -> 06:00) durará 20 segundos por defecto
@@ -120,6 +133,47 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
     return result;
   }
 
+  List<VisibleBody> _interpolatedBodies() {
+    if (_hourlyBodyFrames.length < 2 || _controller == null) {
+      return const <VisibleBody>[];
+    }
+    final int segments = _hourlyBodyFrames.length - 1;
+    final double progress = _controller!.value * segments; // 0..segments
+    final int i = progress.floor().clamp(0, segments - 1);
+    final double t = progress - i;
+
+    final List<VisibleBody> a = _hourlyBodyFrames[i];
+    final List<VisibleBody> b = _hourlyBodyFrames[i + 1];
+
+    final Map<String, VisibleBody> mapA = {for (final s in a) s.name: s};
+    final Map<String, VisibleBody> mapB = {for (final s in b) s.name: s};
+
+    final List<VisibleBody> result = <VisibleBody>[];
+    for (final String name in mapA.keys) {
+      final VisibleBody? sA = mapA[name];
+      final VisibleBody? sB = mapB[name];
+      if (sA == null || sB == null) continue;
+
+      final double alt = sA.altitude + (sB.altitude - sA.altitude) * t;
+      final double deltaAz = (((sB.azimuth - sA.azimuth) + 540) % 360) - 180;
+      final double az = (sA.azimuth + deltaAz * t) % 360;
+
+      if (alt <= 0) continue;
+
+      result.add(VisibleBody(
+        name: name,
+        type: sA.type,
+        magnitude: sA.magnitude,
+        altitude: alt,
+        azimuth: az < 0 ? az + 360 : az,
+        phase: sA.phase,
+        distance: sA.distance,
+      ));
+    }
+
+    return result;
+  }
+
   void _togglePlay() {
     if (_controller == null) return;
     if (_playing) {
@@ -133,6 +187,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   @override
   Widget build(BuildContext context) {
     final List<VisibleStar> stars = _hourlyFrames.isEmpty ? const <VisibleStar>[] : _interpolatedStars();
+    final List<VisibleBody> bodies = _hourlyBodyFrames.isEmpty ? const <VisibleBody>[] : _interpolatedBodies();
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -167,6 +222,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                     ? const CircularProgressIndicator(color: Colors.white)
                     : AltAzSky(
                         stars: stars,
+                        bodies: bodies,
                         animationValue: _controller?.value ?? 0.0,
                       ),
               ),
@@ -191,11 +247,13 @@ class AltAzSky extends StatefulWidget {
   const AltAzSky({
     super.key,
     required this.stars,
+    required this.bodies,
     required this.animationValue,
     this.padding = 16,
   });
 
   final List<VisibleStar> stars;
+  final List<VisibleBody> bodies;
   final double padding;
   // Valor de 0..1 que avanza en el tiempo para animaciones sutiles (twinkle)
   final double animationValue;
@@ -215,9 +273,15 @@ class _AltAzSkyState extends State<AltAzSky> {
           behavior: HitTestBehavior.opaque,
           onTapDown: (TapDownDetails details) {
             final Offset local = details.localPosition;
-            final VisibleStar? tapped = _findTappedStarAt(local, Size(side, side));
-            if (tapped != null) {
-              _showStarSheet(context, tapped);
+            final Size viewport = Size(side, side);
+            final VisibleBody? tappedBody = _findTappedBodyAt(local, viewport);
+            if (tappedBody != null) {
+              _showBodySheet(context, tappedBody);
+              return;
+            }
+            final VisibleStar? tappedStar = _findTappedStarAt(local, viewport);
+            if (tappedStar != null) {
+              _showStarSheet(context, tappedStar);
             }
           },
           child: SizedBox(
@@ -226,6 +290,7 @@ class _AltAzSkyState extends State<AltAzSky> {
             child: CustomPaint(
               painter: _AltAzPainter(
                 stars: widget.stars,
+                bodies: widget.bodies,
                 padding: widget.padding,
                 animationValue: widget.animationValue,
               ),
@@ -265,6 +330,35 @@ class _AltAzSkyState extends State<AltAzSky> {
     return candidate;
   }
 
+  VisibleBody? _findTappedBodyAt(Offset point, Size size) {
+    final Offset center = size.center(Offset.zero);
+    final double maxRadius = math.min(size.width, size.height) / 2 - widget.padding;
+
+    VisibleBody? candidate;
+    double closestDistance = double.infinity;
+
+    for (final VisibleBody body in widget.bodies) {
+      if (body.altitude <= 0) continue;
+      final double alt = body.altitude.clamp(0, 90).toDouble();
+      final double az = body.azimuth % 360;
+
+      final double r = (1 - (alt / 90.0)) * maxRadius;
+      final double theta = _degToRad(az - 90);
+      final Offset pos = Offset(
+        center.dx + r * math.cos(theta),
+        center.dy + r * math.sin(theta),
+      );
+
+      final double dist = (point - pos).distance;
+      final double hitRadius = _hitRadiusForBody(body);
+      if (dist <= hitRadius && dist < closestDistance) {
+        closestDistance = dist;
+        candidate = body;
+      }
+    }
+    return candidate;
+  }
+
   double _degToRad(double degrees) => degrees * math.pi / 180.0;
 
   double _hitRadiusForMagnitude(double magnitude) {
@@ -272,6 +366,13 @@ class _AltAzSkyState extends State<AltAzSky> {
     final double baseVisual = 4.5 - (magnitude + 1.5) * 0.7; // igual que en el painter
     final double visual = baseVisual.clamp(1.0, 4.5);
     return (visual * 3).clamp(10.0, 18.0); // área táctil mínima 10px
+  }
+
+  double _hitRadiusForBody(VisibleBody body) {
+    final bool isMoon = body.type.toLowerCase() == 'moon';
+    final double base = isMoon ? 24.0 : 18.0;
+    final double magAdj = (1.0 - (body.magnitude * 0.04)).clamp(0.8, 1.4);
+    return base * magAdj;
   }
 
   void _showStarSheet(BuildContext context, VisibleStar star) {
@@ -316,6 +417,59 @@ class _AltAzSkyState extends State<AltAzSky> {
               if (star.distance != null)
                 _infoLine('Distancia', _formatDistance(star.distance!)),
               const SizedBox(height: 12),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showBodySheet(BuildContext context, VisibleBody body) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF111111),
+      useSafeArea: true,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext context) {
+        final double bottomSafe = MediaQuery.of(context).padding.bottom;
+        const double navOverlayHeight = 30; // CurvedNavigationBar height
+        return Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 12 + navOverlayHeight + bottomSafe),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.public, color: Colors.white70),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        body.name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                _infoLine('Tipo', body.type),
+                _infoLine('Magnitud', body.magnitude.toStringAsFixed(2)),
+                _infoLine('Altitud', '${body.altitude.toStringAsFixed(1)}°'),
+                _infoLine('Azimut', '${body.azimuth.toStringAsFixed(1)}°'),
+                if (body.phase != null)
+                  _infoLine('Fase', (body.phase! * 100).toStringAsFixed(0) + '%'),
+                if (body.distance != null)
+                  _infoLine('Distancia', _formatDistance(body.distance!)),
+                const SizedBox(height: 12),
               ],
             ),
           ),
@@ -483,11 +637,13 @@ class _AstronomyEventsSectionState extends State<AstronomyEventsSection> {
 class _AltAzPainter extends CustomPainter {
   _AltAzPainter({
     required this.stars,
+    required this.bodies,
     required this.padding,
     required this.animationValue,
   });
 
   final List<VisibleStar> stars;
+  final List<VisibleBody> bodies;
   final double padding;
   final double animationValue; // 0..1, derivado del AnimationController superior
 
@@ -552,6 +708,50 @@ class _AltAzPainter extends CustomPainter {
       if (star.magnitude <= 1.0) {
         _drawLabel(canvas, Offset(x, y), star.name);
       }
+    }
+
+    // Cuerpos (planetas y Luna): estilo diferenciado
+    final Paint bodyPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..blendMode = BlendMode.plus;
+
+    for (final VisibleBody body in bodies) {
+      if (body.altitude <= 0) continue;
+      final double alt = body.altitude.clamp(0, 90).toDouble();
+      final double az = body.azimuth % 360;
+
+      final double r = (1 - (alt / 90.0)) * maxRadius;
+      final double theta = _degToRad(az - 90);
+      final double x = center.dx + r * math.cos(theta);
+      final double y = center.dy + r * math.sin(theta);
+
+      final bool isMoon = body.type.toLowerCase() == 'moon';
+      final bool isPlanet = body.type.toLowerCase() == 'planet';
+
+      final double baseSize = isMoon ? 8.0 : 5.5; // luna más grande
+      final double magAdj = (1.0 - (body.magnitude * 0.04)).clamp(0.7, 1.3);
+      final double radius = baseSize * magAdj;
+
+      final Color color = isMoon
+          ? const Color(0xFFFFF3C4)
+          : isPlanet
+              ? const Color(0xFF99E0FF)
+              : Colors.white;
+
+      // Núcleo
+      bodyPaint.color = color.withOpacity(0.95);
+      canvas.drawCircle(Offset(x, y), radius, bodyPaint);
+      // Halo
+      bodyPaint.color = color.withOpacity(0.35);
+      canvas.drawCircle(Offset(x, y), radius * 2.2, bodyPaint);
+
+      // Fase lunar simple (si disponible): dibujar un disco recortado
+      if (isMoon && body.phase != null) {
+        _drawMoonPhase(canvas, Offset(x, y), radius, body.phase!.clamp(0.0, 1.0));
+      }
+
+      // Etiqueta
+      _drawLabel(canvas, Offset(x, y), body.name);
     }
   }
 
@@ -619,6 +819,31 @@ class _AltAzPainter extends CustomPainter {
     painter.paint(canvas, textPos);
   }
 
+  void _drawMoonPhase(Canvas canvas, Offset center, double radius, double phase) {
+    // fase 0 = nueva, 0.5 = llena. Render aproximado con máscara elíptica
+    final Paint lightPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = const Color(0xFFFFF3C4).withOpacity(0.95)
+      ..blendMode = BlendMode.plus;
+
+    // Disco base ya dibujado; aplicar sombra para fase
+    final Path clip = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+
+    // Simular terminador como elipse desplazada
+    final double k = (phase - 0.5).abs() * 2.0; // 0..1 ancho de sombra
+    final double shadowW = radius * (0.4 + 0.6 * k);
+    final Rect shadowRect = Rect.fromCenter(center: center, width: shadowW * 2, height: radius * 2);
+
+    canvas.save();
+    canvas.clipPath(clip);
+    // Sombra (lado oscuro)
+    final Paint shadow = Paint()..color = Colors.black.withOpacity(0.6);
+    canvas.drawOval(shadowRect, shadow);
+    // Luz residual para no perder volumen
+    canvas.drawCircle(center, radius * 0.6, lightPaint..color = lightPaint.color.withOpacity(0.25));
+    canvas.restore();
+  }
+
   void _drawCardinalMarks(Canvas canvas, Offset center, double r) {
     final TextPainter painter = TextPainter(
       textAlign: TextAlign.center,
@@ -647,6 +872,7 @@ class _AltAzPainter extends CustomPainter {
   bool shouldRepaint(covariant _AltAzPainter oldDelegate) {
     // Redibuja si cambia la lista de estrellas o el padding
     return oldDelegate.stars != stars ||
+        oldDelegate.bodies != bodies ||
         oldDelegate.padding != padding ||
         oldDelegate.animationValue != animationValue;
   }

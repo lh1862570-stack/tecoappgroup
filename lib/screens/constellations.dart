@@ -808,6 +808,8 @@ class _AltAzPainter extends CustomPainter {
         stops: const [0.0, 0.65, 1.0],
       ).createShader(skyRect);
     canvas.drawCircle(center, maxRadius + padding, skyPaint);
+    // Vía Láctea procedural
+    _drawMilkyWayBand(canvas, center, maxRadius + padding);
 
     // Círculo del horizonte
     canvas.drawCircle(center, maxRadius, _circlePaint);
@@ -983,6 +985,40 @@ class _AltAzPainter extends CustomPainter {
       lerp(warm.green, cold.green),
       lerp(warm.blue, cold.blue),
     );
+  }
+
+  void _drawMilkyWayBand(Canvas canvas, Offset center, double radius) {
+    canvas.save();
+    // Rotar banda con el tiempo de la animación (simulación de rotación celeste)
+    final double angle = animationValue * 2 * math.pi;
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    canvas.translate(-center.dx, -center.dy);
+
+    // Clip al círculo del cielo
+    final Path clip = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    canvas.save();
+    canvas.clipPath(clip);
+
+    final double bandHalf = radius * 0.18; // ancho de media banda
+    final Rect bandRect = Rect.fromLTWH(center.dx - radius, center.dy - bandHalf, radius * 2, bandHalf * 2);
+    final Paint bandPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: const [
+          Color(0x00000000),
+          Color(0x22B0C4FF),
+          Color(0x33FFFFFF),
+          Color(0x22B0C4FF),
+          Color(0x00000000),
+        ],
+        stops: const [0.0, 0.25, 0.5, 0.75, 1.0],
+      ).createShader(bandRect);
+    canvas.drawRect(bandRect, bandPaint);
+
+    canvas.restore();
+    canvas.restore();
   }
 
   (double, double) _twinkleFactors(String name, double magnitude) {

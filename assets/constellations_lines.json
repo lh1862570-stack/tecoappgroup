@@ -1,0 +1,36 @@
+{
+  "constellations": [
+    {
+      "name": "Orion",
+      "segments": [
+        ["Betelgeuse", "Bellatrix"],
+        ["Betelgeuse", "Saiph"],
+        ["Rigel", "Saiph"],
+        ["Alnitak", "Alnilam"],
+        ["Alnilam", "Mintaka"],
+        ["Alnitak", "Saiph"],
+        ["Rigel", "Mintaka"]
+      ]
+    },
+    {
+      "name": "Ursa Major",
+      "segments": [
+        ["Dubhe", "Merak"],
+        ["Merak", "Phecda"],
+        ["Phecda", "Megrez"],
+        ["Megrez", "Alioth"],
+        ["Alioth", "Mizar"],
+        ["Mizar", "Alkaid"]
+      ]
+    },
+    {
+      "name": "Scorpius",
+      "segments": [
+        ["Antares", "Alniyat"],
+        ["Alniyat", "Dschubba"],
+        ["Dschubba", "Shaula"],
+        ["Shaula", "Sargas"]
+      ]
+    }
+  ]
+}

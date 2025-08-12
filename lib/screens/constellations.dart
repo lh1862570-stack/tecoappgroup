@@ -1,5 +1,7 @@
 import 'dart:math' as math;
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:tecogroup2/services/stars_service.dart';
 
 class ConstellationsPage extends StatefulWidget {
@@ -13,6 +15,9 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   final StarsService _service = StarsService(baseUrl: 'http://10.0.0.55:8000');
   final List<List<VisibleStar>> _hourlyFrames = <List<VisibleStar>>[];
   final List<List<VisibleBody>> _hourlyBodyFrames = <List<VisibleBody>>[];
+  List<List<String>> _constellationSegments = <List<String>>[]; // pares [nameA, nameB]
+  String? _highlightStarName;
+  bool _showConstellationLines = true;
   AnimationController? _controller;
   bool _loading = true;
   bool _playing = true;
@@ -21,12 +26,47 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   void initState() {
     super.initState();
     _loadNightFrames();
+    _loadConstellationSegments();
   }
 
   @override
   void dispose() {
     _controller?.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadConstellationSegments() async {
+    try {
+      final String jsonStr = await rootBundle.loadString('assets/constellations_lines.json');
+      final dynamic decoded = jsonDecode(jsonStr);
+      if (decoded is Map<String, dynamic>) {
+        final List<dynamic>? consts = decoded['constellations'] as List<dynamic>?;
+        if (consts != null) {
+          final List<List<String>> segs = <List<String>>[];
+          for (final dynamic c in consts) {
+            if (c is Map<String, dynamic>) {
+              final List<dynamic>? segments = c['segments'] as List<dynamic>?;
+              if (segments != null) {
+                for (final dynamic seg in segments) {
+                  if (seg is List && seg.length == 2) {
+                    final String? a = seg[0] is String ? seg[0] as String : null;
+                    final String? b = seg[1] is String ? seg[1] as String : null;
+                    if (a != null && b != null) {
+                      segs.add(<String>[a, b]);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if (mounted) {
+            setState(() => _constellationSegments = segs);
+          }
+        }
+      }
+    } catch (_) {
+      // Asset opcional: si falla, se ignora
+    }
   }
 
   Future<void> _loadNightFrames() async {
@@ -205,6 +245,14 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                     ),
                   ),
                   IconButton(
+                    tooltip: 'Mostrar/Ocultar líneas',
+                    onPressed: () => setState(() => _showConstellationLines = !_showConstellationLines),
+                    icon: Icon(
+                      _showConstellationLines ? Icons.timeline : Icons.timeline_outlined,
+                      color: Colors.white,
+                    ),
+                  ),
+                  IconButton(
                     onPressed: _togglePlay,
                     icon: Icon(_playing ? Icons.pause_circle_filled : Icons.play_circle_filled,
                         color: Colors.white),
@@ -223,6 +271,9 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                     : AltAzSky(
                         stars: stars,
                         bodies: bodies,
+                        constellationSegments: _constellationSegments,
+                        highlightedSegments: _highlightedSegmentsForStar(_highlightStarName),
+                        showConstellationLines: _showConstellationLines,
                         animationValue: _controller?.value ?? 0.0,
                       ),
               ),
@@ -238,6 +289,13 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
       ),
     );
   }
+
+  List<List<String>> _highlightedSegmentsForStar(String? starName) {
+    if (starName == null || _constellationSegments.isEmpty) return const <List<String>>[];
+    return _constellationSegments.where((List<String> seg) {
+      return seg.length == 2 && (seg[0] == starName || seg[1] == starName);
+    }).toList(growable: false);
+  }
 }
 
 /// Widget que dibuja el cielo en proyección alt-az (planetario simple)
@@ -248,13 +306,19 @@ class AltAzSky extends StatefulWidget {
     super.key,
     required this.stars,
     required this.bodies,
+    required this.constellationSegments,
+    required this.highlightedSegments,
     required this.animationValue,
+    this.showConstellationLines = true,
     this.padding = 16,
   });
 
   final List<VisibleStar> stars;
   final List<VisibleBody> bodies;
+  final List<List<String>> constellationSegments;
+  final List<List<String>> highlightedSegments;
   final double padding;
+  final bool showConstellationLines;
   // Valor de 0..1 que avanza en el tiempo para animaciones sutiles (twinkle)
   final double animationValue;
 
@@ -280,8 +344,12 @@ class _AltAzSkyState extends State<AltAzSky> {
               return;
             }
             final VisibleStar? tappedStar = _findTappedStarAt(local, viewport);
+            final state = context.findAncestorStateOfType<_ConstellationsPageState>();
             if (tappedStar != null) {
               _showStarSheet(context, tappedStar);
+              state?.setState(() => state._highlightStarName = tappedStar.name);
+            } else {
+              state?.setState(() => state._highlightStarName = null);
             }
           },
           child: SizedBox(
@@ -291,7 +359,10 @@ class _AltAzSkyState extends State<AltAzSky> {
               painter: _AltAzPainter(
                 stars: widget.stars,
                 bodies: widget.bodies,
+                segments: widget.constellationSegments,
+                highlightedSegments: widget.highlightedSegments,
                 padding: widget.padding,
+                showConstellationLines: widget.showConstellationLines,
                 animationValue: widget.animationValue,
               ),
             ),
@@ -638,13 +709,19 @@ class _AltAzPainter extends CustomPainter {
   _AltAzPainter({
     required this.stars,
     required this.bodies,
+    required this.segments,
+    required this.highlightedSegments,
     required this.padding,
+    required this.showConstellationLines,
     required this.animationValue,
   });
 
   final List<VisibleStar> stars;
   final List<VisibleBody> bodies;
+  final List<List<String>> segments; // pares [A,B]
+  final List<List<String>> highlightedSegments;
   final double padding;
+  final bool showConstellationLines;
   final double animationValue; // 0..1, derivado del AnimationController superior
 
   final Paint _circlePaint = Paint()
@@ -662,6 +739,9 @@ class _AltAzPainter extends CustomPainter {
 
     // Marcas cardinales (opcionales y sutiles)
     _drawCardinalMarks(canvas, center, maxRadius);
+
+    // Mapa rápido de posiciones proyectadas por nombre de estrella visible
+    final Map<String, Offset> nameToPos = <String, Offset>{};
 
     // Estrellas
     final Paint starPaint = Paint()
@@ -707,6 +787,39 @@ class _AltAzPainter extends CustomPainter {
       // Etiqueta para estrellas muy brillantes
       if (star.magnitude <= 1.0) {
         _drawLabel(canvas, Offset(x, y), star.name);
+      }
+
+      nameToPos[star.name] = Offset(x, y);
+    }
+
+    // Líneas de constelaciones: trazar solo si ambos extremos están visibles
+    if (showConstellationLines && segments.isNotEmpty) {
+      final Paint line = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0
+        ..color = const Color(0x66FFFFFF);
+      for (final List<String> seg in segments) {
+        if (seg.length != 2) continue;
+        final Offset? a = nameToPos[seg[0]];
+        final Offset? b = nameToPos[seg[1]];
+        if (a == null || b == null) continue;
+        canvas.drawLine(a, b, line);
+      }
+    }
+
+    // Segmentos resaltados (por toque): más gruesos y brillantes por encima
+    if (showConstellationLines && highlightedSegments.isNotEmpty) {
+      final Paint lineHi = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2
+        ..color = const Color(0xCC33FFE6)
+        ..blendMode = BlendMode.plus;
+      for (final List<String> seg in highlightedSegments) {
+        if (seg.length != 2) continue;
+        final Offset? a = nameToPos[seg[0]];
+        final Offset? b = nameToPos[seg[1]];
+        if (a == null || b == null) continue;
+        canvas.drawLine(a, b, lineHi);
       }
     }
 

@@ -853,8 +853,8 @@ class _AltAzPainter extends CustomPainter {
       double opacity = _opacityForMagnitude(star.magnitude) * opacityMul * extinction;
       opacity = opacity.clamp(0.45, 1.0);
 
-      // Color: más cálido cerca del horizonte
-      final Color baseColor = _colorForAltitude(altAdj);
+      // Color: por temperatura o por altitud si no hay datos
+      final Color baseColor = _colorForStar(star, altAdj);
       // Núcleo
       starPaint.color = baseColor.withOpacity(opacity);
       canvas.drawCircle(Offset(x, y), radius, starPaint);
@@ -985,6 +985,41 @@ class _AltAzPainter extends CustomPainter {
       lerp(warm.green, cold.green),
       lerp(warm.blue, cold.blue),
     );
+  }
+
+  // Color según datos de la estrella (preferir temp/BV/rgbHex)
+  Color _colorForStar(VisibleStar s, double alt) {
+    if (s.rgbHex != null && s.rgbHex!.startsWith('#') && s.rgbHex!.length == 7) {
+      final int r = int.parse(s.rgbHex!.substring(1, 3), radix: 16);
+      final int g = int.parse(s.rgbHex!.substring(3, 5), radix: 16);
+      final int b = int.parse(s.rgbHex!.substring(5, 7), radix: 16);
+      return Color.fromARGB(255, r, g, b);
+    }
+    if (s.bv != null) {
+      return _colorFromBV(s.bv!.clamp(-0.4, 2.0));
+    }
+    if (s.colorTempK != null) {
+      return _colorFromTempK(s.colorTempK!.clamp(2000, 12000));
+    }
+    return _colorForAltitude(alt);
+  }
+
+  Color _colorFromBV(double bv) {
+    // Aproximación simple: azul (-0.3) a rojo (1.7)
+    final double t = ((bv + 0.3) / 2.0).clamp(0.0, 1.0);
+    final Color cold = const Color(0xFFBBD9FF);
+    final Color warm = const Color(0xFFFFC58A);
+    int lerp(int a, int b) => a + ((b - a) * t).round();
+    return Color.fromARGB(255, lerp(cold.red, warm.red), lerp(cold.green, warm.green), lerp(cold.blue, warm.blue));
+  }
+
+  Color _colorFromTempK(double k) {
+    // Mapear 2000K (rojizo) a 12000K (azulado)
+    final double t = ((k - 2000) / (12000 - 2000)).clamp(0.0, 1.0);
+    final Color warm = const Color(0xFFFFB07C);
+    final Color cold = const Color(0xFFBFDFFF);
+    int lerp(int a, int b) => a + ((b - a) * t).round();
+    return Color.fromARGB(255, lerp(warm.red, cold.red), lerp(warm.green, cold.green), lerp(warm.blue, cold.blue));
   }
 
   void _drawMilkyWayBand(Canvas canvas, Offset center, double radius) {

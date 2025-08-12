@@ -14,6 +14,9 @@ class VisibleStar {
     required this.azimuth,
     this.distance,
     this.aliases = const <String>[],
+    this.colorTempK,
+    this.bv,
+    this.rgbHex,
   });
 
   final String name;
@@ -22,6 +25,9 @@ class VisibleStar {
   final double azimuth;
   final double? distance; // opcional
   final List<String> aliases; // opcional
+  final double? colorTempK; // opcional (Kelvin)
+  final double? bv; // opcional (índice B–V)
+  final String? rgbHex; // opcional "#RRGGBB"
 
   factory VisibleStar.fromJson(Map<String, dynamic> json) {
     // Accept both English and Spanish keys just in case
@@ -31,6 +37,9 @@ class VisibleStar {
     num? azimuth = (json['azimuth'] ?? json['azimut'] ?? json['azimuth_deg']) as num?;
     final num? distance = (json['distance'] ?? json['distancia'] ?? json['distance_ly'] ?? json['distance_km'] ?? json['distance_au']) as num?;
     final List<String> aliases = (json['aliases'] as List?)?.whereType<String>().toList() ?? const <String>[];
+    final num? colorTempK = (json['color_temp_K'] ?? json['color_temp_k'] ?? json['colorTempK']) as num?;
+    final num? bv = (json['bv'] ?? json['B-V'] ?? json['b_v']) as num?;
+    final String? rgbHex = json['rgb_hex'] as String?;
 
     if (name == null || magnitude == null || altitude == null || azimuth == null) {
       throw const FormatException('Respuesta inválida: faltan campos esperados');
@@ -43,6 +52,9 @@ class VisibleStar {
       azimuth: azimuth.toDouble(),
       distance: distance?.toDouble(),
       aliases: aliases,
+      colorTempK: colorTempK?.toDouble(),
+      bv: bv?.toDouble(),
+      rgbHex: rgbHex,
     );
   }
 }

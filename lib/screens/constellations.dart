@@ -30,9 +30,10 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
     _loadConstellationSegments();
   }
 
-  Future<void> _initAndLoad() async {
-    await _ensureLocationPermission();
-    await _loadNightFrames();
+  void _initAndLoad() {
+    // No bloquear el arranque esperando permisos; usar fallback inmediato
+    _loadNightFrames();
+    _ensureLocationPermission();
   }
 
   @override
@@ -77,58 +78,70 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
 
   Future<void> _loadNightFrames() async {
     setState(() => _loading = true);
-
-    final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
-
-    // Obtener ubicación real (fallback Santiago de los Caballeros, RD)
-    double lat = -12.0464;
-    double lon = -77.0428;
     try {
-      final Position pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.best);
-      lat = pos.latitude;
-      lon = pos.longitude;
-    } catch (_) {}
+      final List<DateTime> times = _generateNightHoursUtc(DateTime.now().toUtc());
 
-    final List<List<VisibleStar>> frames = <List<VisibleStar>>[];
-    final List<List<VisibleBody>> bodyFrames = <List<VisibleBody>>[];
-    for (final DateTime t in times) {
-      try {
-        final stars = await _service.fetchVisibleStars(
-          latitude: lat,
-          longitude: lon,
-          when: t,
-        );
-        frames.add(stars);
-        // Cuerpos (planetas, Luna). Si el endpoint no existe, vendrá vacío.
-        final bodies = await _service.fetchVisibleBodies(
-          latitude: lat,
-          longitude: lon,
-          when: t,
-        );
-        bodyFrames.add(bodies);
-      } catch (_) {
-        frames.add(const <VisibleStar>[]);
-        bodyFrames.add(const <VisibleBody>[]);
-      }
+      // Resolver ubicación rápida con timeout corto; fallback RD
+      final (double lat, double lon) = await _getLatLonFast();
+
+      // Disparar peticiones en paralelo para reducir espera
+      final List<Future<(List<VisibleStar>, List<VisibleBody>)>> tasks = times.map((DateTime t) async {
+        try {
+          final starsF = _service.fetchVisibleStars(latitude: lat, longitude: lon, when: t);
+          final bodiesF = _service.fetchVisibleBodies(latitude: lat, longitude: lon, when: t);
+          final results = await Future.wait([starsF, bodiesF]);
+          return (results[0] as List<VisibleStar>, results[1] as List<VisibleBody>);
+        } catch (_) {
+          return (const <VisibleStar>[], const <VisibleBody>[]);
+        }
+      }).toList();
+
+      final List<(List<VisibleStar>, List<VisibleBody>)> results = await Future.wait(tasks);
+      final List<List<VisibleStar>> frames = results.map((r) => r.$1).toList();
+      final List<List<VisibleBody>> bodyFrames = results.map((r) => r.$2).toList();
+
+      if (!mounted) return;
+
+      _hourlyFrames
+        ..clear()
+        ..addAll(frames);
+      _hourlyBodyFrames
+        ..clear()
+        ..addAll(bodyFrames);
+
+      _controller?.dispose();
+      // Un ciclo completo (18:00 -> 06:00) durará 20 segundos por defecto
+      _controller = AnimationController(vsync: this, duration: const Duration(seconds: 20))
+        ..addListener(() => setState(() {}))
+        ..repeat();
+
+      _playing = true;
+    } catch (_) {
+      // Ignorar, UI seguirá sin bloquearse
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
+  }
 
-    if (!mounted) return;
-
-    _hourlyFrames
-      ..clear()
-      ..addAll(frames);
-    _hourlyBodyFrames
-      ..clear()
-      ..addAll(bodyFrames);
-
-    _controller?.dispose();
-    // Un ciclo completo (18:00 -> 06:00) durará 20 segundos por defecto
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 20))
-      ..addListener(() => setState(() {}))
-      ..repeat();
-
-    _playing = true;
-    setState(() => _loading = false);
+  Future<(double, double)> _getLatLonFast() async {
+    // Fallback: Santiago de los Caballeros, RD
+    const double fallbackLat = 19.4517;
+    const double fallbackLon = -70.6970;
+    try {
+      // Intentar último conocido primero (no bloquea)
+      final Position? last = await Geolocator.getLastKnownPosition();
+      if (last != null) {
+        return (last.latitude, last.longitude);
+      }
+      // Intentar una lectura rápida con límite de tiempo
+      final Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.low,
+        timeLimit: const Duration(seconds: 3),
+      );
+      return (pos.latitude, pos.longitude);
+    } catch (_) {
+      return (fallbackLat, fallbackLon);
+    }
   }
 
   Future<void> _ensureLocationPermission() async {

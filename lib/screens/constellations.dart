@@ -289,11 +289,11 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   const Text(
-                    'Constelaciones',
+                      'Constelaciones',
                     overflow: TextOverflow.ellipsis,
                     softWrap: false,
-                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
+                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -960,29 +960,25 @@ class _AltAzPainter extends CustomPainter {
       final bool isMoon = body.type.toLowerCase() == 'moon';
       final bool isPlanet = body.type.toLowerCase() == 'planet';
 
-      final double baseSize = isMoon ? 8.0 : 5.5; // luna más grande
-      final double magAdj = (1.0 - (body.magnitude * 0.04)).clamp(0.7, 1.3);
+      final double baseSize = isMoon ? 9.0 : 6.0; // luna y planetas un poco mayores
+      final double magAdj = (1.0 - (body.magnitude * 0.04)).clamp(0.7, 1.4);
       final double radius = baseSize * magAdj;
 
-      final Color color = isMoon
-          ? const Color(0xFFFFF3C4)
-          : isPlanet
-              ? const Color(0xFF99E0FF)
-              : Colors.white;
-
-      // Núcleo
-      bodyPaint.color = color.withOpacity(0.95);
-      canvas.drawCircle(Offset(x, y), radius, bodyPaint);
-      // Halo
-      bodyPaint.color = color.withOpacity(0.35);
-      canvas.drawCircle(Offset(x, y), radius * 2.2, bodyPaint);
-
-      // Fase lunar simple (si disponible): dibujar un disco recortado
-      if (isMoon && body.phase != null) {
-        _drawMoonPhase(canvas, Offset(x, y), radius, body.phase!.clamp(0.0, 1.0));
+      if (isMoon) {
+        _drawMoonShaded(canvas, Offset(x, y), radius, body.phase?.clamp(0.0, 1.0) ?? 0.5);
+      } else if (isPlanet) {
+        final Color color = _planetColor(body.name);
+        final bool isSaturn = body.name.toLowerCase().contains('saturn');
+        _drawPlanet(canvas, Offset(x, y), radius, color, withRings: isSaturn);
+      } else {
+        // Otros cuerpos: disco simple con halo
+        final Color color = const Color(0xFFB0D8FF);
+        bodyPaint.color = color.withOpacity(0.95);
+        canvas.drawCircle(Offset(x, y), radius, bodyPaint);
+        bodyPaint.color = color.withOpacity(0.35);
+        canvas.drawCircle(Offset(x, y), radius * 2.2, bodyPaint);
       }
 
-      // Etiqueta
       _drawLabel(canvas, Offset(x, y), body.name);
     }
   }
@@ -1170,29 +1166,92 @@ class _AltAzPainter extends CustomPainter {
     return s;
   }
 
-  void _drawMoonPhase(Canvas canvas, Offset center, double radius, double phase) {
-    // fase 0 = nueva, 0.5 = llena. Render aproximado con máscara elíptica
-    final Paint lightPaint = Paint()
+  void _drawMoonShaded(Canvas canvas, Offset center, double radius, double phase) {
+    // Disco base
+    final Paint moon = Paint()
       ..style = PaintingStyle.fill
-      ..color = const Color(0xFFFFF3C4).withOpacity(0.95)
-      ..blendMode = BlendMode.plus;
+      ..color = const Color(0xFFF5F2E9)
+      ..blendMode = BlendMode.srcOver;
+    canvas.drawCircle(center, radius, moon);
 
-    // Disco base ya dibujado; aplicar sombra para fase
+    // Terminador suave usando máscara elíptica y gradiente radial
+    final double t = (phase - 0.5); // -0.5..0.5
+    final double terminatorOffset = t * radius * 1.2;
+    final Rect gradRect = Rect.fromCircle(center: Offset(center.dx + terminatorOffset, center.dy), radius: radius * 1.2);
+    final Paint shade = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          Colors.black.withOpacity(0.75),
+          Colors.black.withOpacity(0.0),
+        ],
+        stops: const [0.6, 1.0],
+      ).createShader(gradRect)
+      ..blendMode = BlendMode.dstIn;
+
+    canvas.saveLayer(Rect.fromCircle(center: center, radius: radius * 1.3), Paint());
+    // Dibuja un disco negro como sombra en el lado nocturno
     final Path clip = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
-
-    // Simular terminador como elipse desplazada
-    final double k = (phase - 0.5).abs() * 2.0; // 0..1 ancho de sombra
-    final double shadowW = radius * (0.4 + 0.6 * k);
-    final Rect shadowRect = Rect.fromCenter(center: center, width: shadowW * 2, height: radius * 2);
-
-    canvas.save();
     canvas.clipPath(clip);
-    // Sombra (lado oscuro)
-    final Paint shadow = Paint()..color = Colors.black.withOpacity(0.6);
-    canvas.drawOval(shadowRect, shadow);
-    // Luz residual para no perder volumen
-    canvas.drawCircle(center, radius * 0.6, lightPaint..color = lightPaint.color.withOpacity(0.25));
+    canvas.drawCircle(Offset(center.dx - terminatorOffset, center.dy), radius * 1.05, Paint()..color = Colors.black87);
+    // Aplica gradiente para suavizar
+    canvas.drawCircle(center, radius * 1.2, shade);
     canvas.restore();
+
+    // Sutil iluminación especular
+    final Shader highlightShader = RadialGradient(
+      colors: [Colors.white.withOpacity(0.35), Colors.transparent],
+      stops: const [0.0, 1.0],
+    ).createShader(Rect.fromCircle(center: Offset(center.dx - terminatorOffset * 0.6, center.dy - radius * 0.4), radius: radius));
+    canvas.drawCircle(center, radius, Paint()..shader = highlightShader);
+  }
+
+  void _drawPlanet(Canvas canvas, Offset center, double radius, Color color, {bool withRings = false}) {
+    // Disco del planeta con sombreado radial
+    final Paint disk = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          color.withOpacity(1.0),
+          Color.lerp(color, Colors.black, 0.4)!,
+        ],
+        stops: const [0.2, 1.0],
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
+    canvas.drawCircle(center, radius, disk);
+
+    // Bandas muy sutiles para Júpiter (color anaranjado)
+    if (color == const Color(0xFFFFD29B)) {
+      final Paint band = Paint()..color = const Color(0x66C78F5A);
+      for (int i = -2; i <= 2; i++) {
+        final double y = center.dy + i * radius * 0.25;
+        canvas.drawLine(Offset(center.dx - radius * 0.9, y), Offset(center.dx + radius * 0.9, y), band);
+      }
+    }
+
+    // Anillos para Saturno
+    if (withRings) {
+      final Paint rings = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = radius * 0.6
+        ..color = const Color(0x44E0D7B5)
+        ..blendMode = BlendMode.srcOver;
+      final Rect ellipse = Rect.fromCenter(center: center, width: radius * 3.2, height: radius * 1.4);
+      canvas.drawOval(ellipse, rings);
+    }
+
+    // Halo leve
+    final Paint halo = Paint()
+      ..color = color.withOpacity(0.35)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.0);
+    canvas.drawCircle(center, radius * 1.9, halo);
+  }
+
+  Color _planetColor(String name) {
+    final String n = name.toLowerCase();
+    if (n.contains('mars')) return const Color(0xFFE07A5F);
+    if (n.contains('jupiter')) return const Color(0xFFFFD29B);
+    if (n.contains('saturn')) return const Color(0xFFEAD7A5);
+    if (n.contains('venus')) return const Color(0xFFF2E6C8);
+    if (n.contains('mercury')) return const Color(0xFFD0D0D0);
+    return const Color(0xFFB0D8FF);
   }
 
   void _drawCardinalMarks(Canvas canvas, Offset center, double r) {

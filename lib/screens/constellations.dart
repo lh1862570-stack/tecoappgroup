@@ -165,7 +165,10 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
               child: Center(
                 child: _loading
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : AltAzSky(stars: stars),
+                    : AltAzSky(
+                        stars: stars,
+                        animationValue: _controller?.value ?? 0.0,
+                      ),
               ),
             ),
             const SizedBox(height: 8),
@@ -185,10 +188,17 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
 /// - Altitud (0° horizonte, 90° cenit) se proyecta a radio
 /// - Azimut (0° Norte, 90° Este) se proyecta a ángulo
 class AltAzSky extends StatefulWidget {
-  const AltAzSky({super.key, required this.stars, this.padding = 16});
+  const AltAzSky({
+    super.key,
+    required this.stars,
+    required this.animationValue,
+    this.padding = 16,
+  });
 
   final List<VisibleStar> stars;
   final double padding;
+  // Valor de 0..1 que avanza en el tiempo para animaciones sutiles (twinkle)
+  final double animationValue;
 
   @override
   State<AltAzSky> createState() => _AltAzSkyState();
@@ -214,7 +224,11 @@ class _AltAzSkyState extends State<AltAzSky> {
             width: side,
             height: side,
             child: CustomPaint(
-              painter: _AltAzPainter(stars: widget.stars, padding: widget.padding),
+              painter: _AltAzPainter(
+                stars: widget.stars,
+                padding: widget.padding,
+                animationValue: widget.animationValue,
+              ),
             ),
           ),
         );
@@ -467,10 +481,15 @@ class _AstronomyEventsSectionState extends State<AstronomyEventsSection> {
 }
 
 class _AltAzPainter extends CustomPainter {
-  _AltAzPainter({required this.stars, required this.padding});
+  _AltAzPainter({
+    required this.stars,
+    required this.padding,
+    required this.animationValue,
+  });
 
   final List<VisibleStar> stars;
   final double padding;
+  final double animationValue; // 0..1, derivado del AnimationController superior
 
   final Paint _circlePaint = Paint()
     ..style = PaintingStyle.stroke
@@ -489,7 +508,9 @@ class _AltAzPainter extends CustomPainter {
     _drawCardinalMarks(canvas, center, maxRadius);
 
     // Estrellas
-    final Paint starPaint = Paint()..style = PaintingStyle.fill;
+    final Paint starPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..blendMode = BlendMode.plus; // suma aditiva para halo sutil
 
     for (final VisibleStar star in stars) {
       if (star.altitude <= 0) continue; // solo por encima del horizonte
@@ -505,13 +526,32 @@ class _AltAzPainter extends CustomPainter {
       final double x = center.dx + r * math.cos(theta);
       final double y = center.dy + r * math.sin(theta);
 
-      final double radius = _radiusForMagnitude(star.magnitude);
+      // Twinkle: factores de tamaño/opacidad por estrella con fase distinta
+      final (double sizeMul, double opacityMul) = _twinkleFactors(star.name, star.magnitude);
 
-      // Brillo leve por magnitud
-      final double opacity = _opacityForMagnitude(star.magnitude);
+      final double baseRadius = _radiusForMagnitude(star.magnitude);
+      final double radius = (baseRadius * sizeMul).clamp(0.8, 6.0);
+
+      // Brillo base por magnitud con variación (twinkle)
+      double opacity = _opacityForMagnitude(star.magnitude) * opacityMul;
+      opacity = opacity.clamp(0.45, 1.0);
+
+      // Núcleo
       starPaint.color = Colors.white.withOpacity(opacity);
-
       canvas.drawCircle(Offset(x, y), radius, starPaint);
+
+      // Halo externo suave (dos capas)
+      final double halo1Radius = radius * 1.8;
+      final double halo2Radius = radius * 2.8;
+      final double haloOpacity = (opacity * 0.35).clamp(0.15, 0.5);
+      starPaint.color = Colors.white.withOpacity(haloOpacity);
+      canvas.drawCircle(Offset(x, y), halo1Radius, starPaint);
+      canvas.drawCircle(Offset(x, y), halo2Radius, starPaint);
+
+      // Etiqueta para estrellas muy brillantes
+      if (star.magnitude <= 1.0) {
+        _drawLabel(canvas, Offset(x, y), star.name);
+      }
     }
   }
 
@@ -527,6 +567,56 @@ class _AltAzPainter extends CustomPainter {
     // Más brillante para magnitudes negativas. Rango aproximado 0.5 .. 1.0
     final double base = 1.0 - (magnitude * 0.07);
     return base.clamp(0.5, 1.0);
+  }
+
+  (double, double) _twinkleFactors(String name, double magnitude) {
+    // Fase por estrella a partir del nombre (estable entre renders)
+    final int h = name.hashCode;
+    final double phase = (h & 0xFFFF) / 0xFFFF * 2 * math.pi;
+    // Velocidad global: multiplicamos animationValue (0..1) para que parpadee ~2 Hz
+    final double t = animationValue * 12.0 * 2 * math.pi; // ~6 ciclos por vuelta
+    // Amplitud menor para estrellas débiles (menos notorio)
+    final double magnitudeFactor = (1.5 - magnitude).clamp(0.4, 1.2);
+    final double s = math.sin(t + phase);
+    final double sizeMul = 1.0 + 0.06 * s * magnitudeFactor; // +/- 6%
+    final double opacityMul = 1.0 + 0.10 * s * magnitudeFactor; // +/- 10%
+    return (sizeMul, opacityMul);
+  }
+
+  void _drawLabel(Canvas canvas, Offset pos, String text) {
+    final TextPainter painter = TextPainter(
+      textAlign: TextAlign.left,
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    );
+    // Sombra ligera
+    painter.text = TextSpan(
+      text: text,
+      style: const TextStyle(
+        fontSize: 11,
+        color: Colors.black54,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+    painter.layout();
+    final Offset shadowPos = pos + const Offset(8, -10) + const Offset(1, 1);
+    painter.paint(canvas, shadowPos);
+
+    // Texto principal
+    painter.text = const TextSpan(
+      text: '',
+    );
+    painter.text = TextSpan(
+      text: text,
+      style: const TextStyle(
+        fontSize: 11,
+        color: Colors.white,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    painter.layout();
+    final Offset textPos = pos + const Offset(8, -10);
+    painter.paint(canvas, textPos);
   }
 
   void _drawCardinalMarks(Canvas canvas, Offset center, double r) {
@@ -556,7 +646,9 @@ class _AltAzPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _AltAzPainter oldDelegate) {
     // Redibuja si cambia la lista de estrellas o el padding
-    return oldDelegate.stars != stars || oldDelegate.padding != padding;
+    return oldDelegate.stars != stars ||
+        oldDelegate.padding != padding ||
+        oldDelegate.animationValue != animationValue;
   }
 }
 

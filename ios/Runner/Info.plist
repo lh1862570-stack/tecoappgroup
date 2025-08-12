@@ -34,6 +34,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+  <key>NSCameraUsageDescription</key>
+  <string>Necesitamos la cámara para mostrar el cielo con realidad aumentada.</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Necesitamos tu ubicación para alinear el cielo con tu posición.</string>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

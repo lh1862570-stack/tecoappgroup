@@ -19,6 +19,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   List<List<String>> _constellationSegments = <List<String>>[]; // pares [nameA, nameB]
   String? _highlightStarName;
   bool _showConstellationLines = true;
+  bool _arMode = false;
   AnimationController? _controller;
   bool _loading = true;
   bool _playing = true;
@@ -295,6 +296,12 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                       ),
                     ],
                   ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: 'Modo Cámara',
+                    onPressed: () => setState(() => _arMode = !_arMode),
+                    icon: Icon(_arMode ? Icons.camera_alt : Icons.camera_alt_outlined, color: Colors.white),
+                  ),
                   IconButton(
                     onPressed: _togglePlay,
                     icon: Icon(_playing ? Icons.pause_circle_filled : Icons.play_circle_filled,
@@ -311,14 +318,20 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
               child: Center(
                 child: _loading
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : AltAzSky(
-                        stars: stars,
-                        bodies: bodies,
-                        constellationSegments: _constellationSegments,
-                        highlightedSegments: _highlightedSegmentsForStar(_highlightStarName),
-                        showConstellationLines: _showConstellationLines,
-                        animationValue: _controller?.value ?? 0.0,
-                      ),
+                    : _arMode
+                        ? CameraSkyOverlay(
+                            stars: stars,
+                            bodies: bodies,
+                            animationValue: _controller?.value ?? 0.0,
+                          )
+                        : AltAzSky(
+                            stars: stars,
+                            bodies: bodies,
+                            constellationSegments: _constellationSegments,
+                            highlightedSegments: _highlightedSegmentsForStar(_highlightStarName),
+                            showConstellationLines: _showConstellationLines,
+                            animationValue: _controller?.value ?? 0.0,
+                          ),
               ),
             ),
             const SizedBox(height: 8),
@@ -1064,6 +1077,39 @@ class _AltAzPainter extends CustomPainter {
         oldDelegate.bodies != bodies ||
         oldDelegate.padding != padding ||
         oldDelegate.animationValue != animationValue;
+  }
+
+}
+
+// --- AR ligero: cámara + overlay ---
+class CameraSkyOverlay extends StatefulWidget {
+  const CameraSkyOverlay({super.key, required this.stars, required this.bodies, required this.animationValue});
+
+  final List<VisibleStar> stars;
+  final List<VisibleBody> bodies;
+  final double animationValue;
+
+  @override
+  State<CameraSkyOverlay> createState() => _CameraSkyOverlayState();
+}
+
+class _CameraSkyOverlayState extends State<CameraSkyOverlay> {
+  @override
+  Widget build(BuildContext context) {
+    // Placeholder: en siguiente paso añadimos CameraController y sensores
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Container(color: Colors.black),
+        const Center(
+          child: Text(
+            'Modo Cámara (AR) — Próximo paso: activar cámara y sensores',
+            style: TextStyle(color: Colors.white70),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ],
+    );
   }
 }
 

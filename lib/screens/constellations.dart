@@ -24,6 +24,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
   List<List<String>> _constellationSegments = <List<String>>[]; // pares [nameA, nameB]
   String? _highlightStarName;
   bool _showConstellationLines = true;
+  double _lightPollution = 0.3; // 0=oscuro, 1=muy iluminado
   bool _arMode = false;
   AnimationController? _controller;
   bool _loading = true;
@@ -281,19 +282,23 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
         child: Column(
           children: [
             Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+              child: Wrap(
+                spacing: 12,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
-                  const Expanded(
-                    child: Text(
-                      'Constelaciones',
-                      style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
+                  const Text(
+                    'Constelaciones',
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                    style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                   Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       const Text('Líneas', style: TextStyle(color: Colors.white70)),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 6),
                       Switch.adaptive(
                         value: _showConstellationLines,
                         onChanged: (bool v) => setState(() => _showConstellationLines = v),
@@ -301,7 +306,24 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                       ),
                     ],
                   ),
-                  const SizedBox(width: 8),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.nights_stay, color: Colors.white70, size: 18),
+                      const SizedBox(width: 6),
+                      SizedBox(
+                        width: 120,
+                        child: Slider(
+                          value: _lightPollution,
+                          onChanged: (v) => setState(() => _lightPollution = v),
+                          min: 0,
+                          max: 1,
+                          divisions: 10,
+                          label: _lightPollution.toStringAsFixed(1),
+                        ),
+                      ),
+                    ],
+                  ),
                   IconButton(
                     tooltip: 'Modo Cámara',
                     onPressed: () => setState(() => _arMode = !_arMode),
@@ -335,6 +357,7 @@ class _ConstellationsPageState extends State<ConstellationsPage> with SingleTick
                             constellationSegments: _constellationSegments,
                             highlightedSegments: _highlightedSegmentsForStar(_highlightStarName),
                             showConstellationLines: _showConstellationLines,
+                            lightPollution: _lightPollution,
                             animationValue: _controller?.value ?? 0.0,
                           ),
               ),
@@ -370,6 +393,7 @@ class AltAzSky extends StatefulWidget {
     required this.constellationSegments,
     required this.highlightedSegments,
     required this.animationValue,
+    this.lightPollution = 0.3,
     this.showConstellationLines = true,
     this.padding = 16,
   });
@@ -382,6 +406,7 @@ class AltAzSky extends StatefulWidget {
   final bool showConstellationLines;
   // Valor de 0..1 que avanza en el tiempo para animaciones sutiles (twinkle)
   final double animationValue;
+  final double lightPollution; // 0..1
 
   @override
   State<AltAzSky> createState() => _AltAzSkyState();
@@ -425,6 +450,7 @@ class _AltAzSkyState extends State<AltAzSky> {
                 padding: widget.padding,
                 showConstellationLines: widget.showConstellationLines,
                 animationValue: widget.animationValue,
+                lightPollution: widget.lightPollution,
               ),
             ),
           ),
@@ -776,6 +802,7 @@ class _AltAzPainter extends CustomPainter {
     required this.padding,
     required this.showConstellationLines,
     required this.animationValue,
+    required this.lightPollution,
   });
 
   final List<VisibleStar> stars;
@@ -785,6 +812,7 @@ class _AltAzPainter extends CustomPainter {
   final double padding;
   final bool showConstellationLines;
   final double animationValue; // 0..1, derivado del AnimationController superior
+  final double lightPollution; // 0..1
 
   final Paint _circlePaint = Paint()
     ..style = PaintingStyle.stroke
@@ -810,6 +838,12 @@ class _AltAzPainter extends CustomPainter {
     canvas.drawCircle(center, maxRadius + padding, skyPaint);
     // Vía Láctea procedural
     _drawMilkyWayBand(canvas, center, maxRadius + padding);
+    // Velado por contaminación lumínica
+    if (lightPollution > 0) {
+      final double veil = (lightPollution * 0.55).clamp(0.0, 0.6);
+      final Paint veilPaint = Paint()..color = Color.fromRGBO(0, 0, 0, veil);
+      canvas.drawCircle(center, maxRadius + padding, veilPaint);
+    }
 
     // Círculo del horizonte
     canvas.drawCircle(center, maxRadius, _circlePaint);
@@ -849,7 +883,7 @@ class _AltAzPainter extends CustomPainter {
 
       // Brillo base por magnitud con variación (twinkle)
       // atenuación atmosférica hacia el horizonte
-      final double extinction = _extinctionForAltitude(altAdj);
+      final double extinction = _extinctionForAltitude(altAdj) * (1.0 - lightPollution * 0.35);
       double opacity = _opacityForMagnitude(star.magnitude) * opacityMul * extinction;
       opacity = opacity.clamp(0.45, 1.0);
 

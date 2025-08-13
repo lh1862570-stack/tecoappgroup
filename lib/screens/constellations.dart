@@ -1,4 +1,6 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -396,6 +398,7 @@ class AltAzSky extends StatefulWidget {
     this.lightPollution = 0.3,
     this.showConstellationLines = true,
     this.padding = 16,
+    this.milkyWayImage,
   });
 
   final List<VisibleStar> stars;
@@ -407,12 +410,33 @@ class AltAzSky extends StatefulWidget {
   // Valor de 0..1 que avanza en el tiempo para animaciones sutiles (twinkle)
   final double animationValue;
   final double lightPollution; // 0..1
+  final ui.Image? milkyWayImage;
 
   @override
   State<AltAzSky> createState() => _AltAzSkyState();
 }
 
 class _AltAzSkyState extends State<AltAzSky> {
+  ui.Image? _milkyWayImage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMilkyWayTexture();
+  }
+
+  Future<void> _loadMilkyWayTexture() async {
+    try {
+      final ByteData data = await rootBundle.load('assets/textures/milky_way.jpg');
+      final Uint8List bytes = data.buffer.asUint8List();
+      final ui.Codec codec = await ui.instantiateImageCodec(bytes);
+      final ui.FrameInfo frame = await codec.getNextFrame();
+      if (!mounted) return;
+      setState(() => _milkyWayImage = frame.image);
+    } catch (_) {
+      // Asset opcional: fallback a banda procedural
+    }
+  }
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -451,6 +475,7 @@ class _AltAzSkyState extends State<AltAzSky> {
                 showConstellationLines: widget.showConstellationLines,
                 animationValue: widget.animationValue,
                 lightPollution: widget.lightPollution,
+                milkyWayImage: _milkyWayImage,
               ),
             ),
           ),
@@ -803,6 +828,7 @@ class _AltAzPainter extends CustomPainter {
     required this.showConstellationLines,
     required this.animationValue,
     required this.lightPollution,
+    this.milkyWayImage,
   });
 
   final List<VisibleStar> stars;
@@ -813,6 +839,7 @@ class _AltAzPainter extends CustomPainter {
   final bool showConstellationLines;
   final double animationValue; // 0..1, derivado del AnimationController superior
   final double lightPollution; // 0..1
+  final ui.Image? milkyWayImage;
 
   final Paint _circlePaint = Paint()
     ..style = PaintingStyle.stroke
@@ -836,8 +863,12 @@ class _AltAzPainter extends CustomPainter {
         stops: const [0.0, 0.65, 1.0],
       ).createShader(skyRect);
     canvas.drawCircle(center, maxRadius + padding, skyPaint);
-    // Vía Láctea procedural
-    _drawMilkyWayBand(canvas, center, maxRadius + padding);
+    // Vía Láctea: textura si existe; sino procedural
+    if (milkyWayImage != null) {
+      _drawMilkyWayTexture(canvas, center, maxRadius + padding, milkyWayImage!);
+    } else {
+      _drawMilkyWayBand(canvas, center, maxRadius + padding);
+    }
     // Velado por contaminación lumínica
     if (lightPollution > 0) {
       final double veil = (lightPollution * 0.55).clamp(0.0, 0.6);
@@ -1083,6 +1114,31 @@ class _AltAzPainter extends CustomPainter {
     canvas.drawRect(bandRect, bandPaint);
 
     canvas.restore();
+    canvas.restore();
+  }
+
+  void _drawMilkyWayTexture(Canvas canvas, Offset center, double radius, ui.Image img) {
+    canvas.save();
+    final double angle = animationValue * 2 * math.pi;
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(angle);
+    canvas.translate(-center.dx, -center.dy);
+
+    final Path clip = Path()..addOval(Rect.fromCircle(center: center, radius: radius));
+    canvas.clipPath(clip);
+
+    final Rect dst = Rect.fromCircle(center: center, radius: radius);
+    final Size imgSize = Size(img.width.toDouble(), img.height.toDouble());
+    final FittedSizes fitted = applyBoxFit(BoxFit.cover, imgSize, dst.size);
+    final Rect inputSubrect = Alignment.center.inscribe(fitted.source, Offset.zero & imgSize);
+    final Rect outputSubrect = Alignment.center.inscribe(fitted.destination, dst);
+
+    // Usar drawImageRect para controlar recorte y escala
+    final Paint p = Paint()
+      ..colorFilter = ColorFilter.mode(Colors.white.withOpacity(1.0 - lightPollution * 0.6), BlendMode.modulate)
+      ..filterQuality = FilterQuality.low;
+    canvas.drawImageRect(img, inputSubrect, outputSubrect, p);
+
     canvas.restore();
   }
 
